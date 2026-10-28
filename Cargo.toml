@@ -1,0 +1,11 @@
+[package]
+name = "compact-parquet-thrift"
+version = "0.2.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Allocation-free Thrift Compact codec and bounded-memory Parquet page streaming"
+
+[features]
+default = []
+
+[dependencies]
