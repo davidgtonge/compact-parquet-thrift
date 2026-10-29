@@ -251,7 +251,8 @@ impl HybridRle {
                     if cap == 0 {
                         break;
                     }
-                    let take = left_in_group.min(cap as u8);
+                    // A group holds at most 8 values; saturate rather than truncate a large cap.
+                    let take = left_in_group.min(u8::try_from(cap).unwrap_or(u8::MAX));
                     if take == 0 {
                         break;
                     }

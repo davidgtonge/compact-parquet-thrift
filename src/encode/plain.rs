@@ -48,6 +48,18 @@ pub fn encode_bool(values: &[bool], out: &mut [u8]) -> Result<usize> {
     Ok(bytes)
 }
 
+pub fn encode_fixed(width: u32, values: &[&[u8]], out: &mut [u8]) -> Result<usize> {
+    let width = width as usize;
+    let bytes = values.len().checked_mul(width).ok_or(EncodeError::Overflow)?;
+    if out.len() < bytes { return Err(EncodeError::OutputFull); }
+    for (i, value) in values.iter().enumerate() {
+        if value.len() != width { return Err(EncodeError::ValueOutOfRange); }
+        let at = i * width;
+        out[at..at + width].copy_from_slice(value);
+    }
+    Ok(bytes)
+}
+
 pub fn encode_bytes(values: &[&[u8]], out: &mut [u8]) -> Result<usize> {
     let mut at: usize = 0;
     for value in values {

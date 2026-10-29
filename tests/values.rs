@@ -432,3 +432,31 @@ fn decoder_state_has_bounded_size() {
     assert!(size_of::<HybridRle>() <= 128);
     assert!(size_of::<DictionaryIds>() <= 160);
 }
+
+#[test]
+fn hybrid_rle_feed_limited_takes_many_values_per_call() {
+    use compact_parquet_thrift::encode::encode_hybrid;
+    // Mixed repeat runs and bit-packed groups: a long run, then values that do not repeat.
+    let mut values: Vec<u32> = vec![3; 300];
+    let mut x = 7u32;
+    for _ in 0..2000 {
+        x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+        values.push((x >> 16) % 17);
+    }
+    values.extend(std::iter::repeat_n(9, 500));
+    let mut buf = vec![0u8; 16 * 1024];
+    let n = encode_hybrid(5, &values, &mut buf).unwrap();
+    let encoded = &buf[..n];
+    for limit in [256usize, 300, 1000, usize::MAX] {
+        let mut d = HybridRle::new(5, values.len() as u64).unwrap();
+        let mut out = Vec::new();
+        let mut at = 0;
+        while !d.is_complete() {
+            let before = out.len();
+            at += d.feed_limited(&encoded[at..], limit, |v| out.push(v)).unwrap();
+            assert!(out.len() > before, "limit {limit}: no progress at {} values", out.len());
+            assert!(out.len() - before <= limit);
+        }
+        assert_eq!(out, values, "limit {limit}");
+    }
+}

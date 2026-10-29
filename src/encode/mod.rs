@@ -48,11 +48,17 @@ pub enum ColumnValues<'a> {
     F32(&'a [f32]),
     F64(&'a [f64]),
     Bytes(&'a [&'a [u8]]),
+    /// PLAIN FIXED_LEN_BYTE_ARRAY. Every value has length `width`.
+    Fixed { width: u32, values: &'a [&'a [u8]] },
+    /// INT32 with converted type DATE.
+    Date(&'a [i32]),
     /// `ids` has one entry per present row and indexes `dictionary`.
     DictI32 { dictionary: &'a [i32], ids: &'a [u32] },
+    DictI64 { dictionary: &'a [i64], ids: &'a [u32] },
     DictF32 { dictionary: &'a [f32], ids: &'a [u32] },
     DictF64 { dictionary: &'a [f64], ids: &'a [u32] },
     DictBytes { dictionary: &'a [&'a [u8]], ids: &'a [u32] },
+    DictFixed { width: u32, dictionary: &'a [&'a [u8]], ids: &'a [u32] },
     /// DELTA_BINARY_PACKED, blocks of 128 and four mini-blocks.
     DeltaI32(&'a [i32]),
     DeltaI64(&'a [i64]),
@@ -306,10 +312,14 @@ fn value_count(values: &ColumnValues<'_>) -> usize {
         ColumnValues::F32(v) => v.len(),
         ColumnValues::F64(v) => v.len(),
         ColumnValues::Bytes(v) => v.len(),
+        ColumnValues::Fixed { values, .. } => values.len(),
+        ColumnValues::Date(v) => v.len(),
         ColumnValues::DictI32 { ids, .. }
+        | ColumnValues::DictI64 { ids, .. }
         | ColumnValues::DictF32 { ids, .. }
         | ColumnValues::DictF64 { ids, .. }
-        | ColumnValues::DictBytes { ids, .. } => ids.len(),
+        | ColumnValues::DictBytes { ids, .. }
+        | ColumnValues::DictFixed { ids, .. } => ids.len(),
         ColumnValues::DeltaI32(v) => v.len(),
         ColumnValues::DeltaI64(v) => v.len(),
         ColumnValues::DeltaLengthBytes(v) | ColumnValues::DeltaBytes(v) => v.len(),
@@ -319,9 +329,11 @@ fn value_count(values: &ColumnValues<'_>) -> usize {
 pub(crate) fn value_encoding(values: &ColumnValues<'_>) -> i32 {
     match values {
         ColumnValues::DictI32 { .. }
+        | ColumnValues::DictI64 { .. }
         | ColumnValues::DictF32 { .. }
         | ColumnValues::DictF64 { .. }
-        | ColumnValues::DictBytes { .. } => 8,
+        | ColumnValues::DictBytes { .. }
+        | ColumnValues::DictFixed { .. } => 8,
         ColumnValues::DeltaI32(_) | ColumnValues::DeltaI64(_) => 5,
         ColumnValues::DeltaLengthBytes(_) => 6,
         ColumnValues::DeltaBytes(_) => 7,
@@ -362,13 +374,25 @@ fn write_footer_thrift(
 
 fn write_schema_leaf(w: &mut Writer<SliceSink<'_>>, column: &Column<'_>) -> crate::Result<()> {
     w.field_i32(1, physical_type(&column.values))?;
+    if let Some(width) = fixed_width(&column.values) {
+        w.field_i32(2, width as i32)?;
+    }
     w.field_i32(3, if column.present.is_some() { 1 } else { 0 })?;
     w.field_binary(4, column.name.as_bytes())?;
-    if matches!(column.values, ColumnValues::Bytes(_) | ColumnValues::DictBytes { .. }
+    if matches!(column.values, ColumnValues::Date(_)) {
+        w.field_i32(6, 6)?; // DATE
+    } else if matches!(column.values, ColumnValues::Bytes(_) | ColumnValues::DictBytes { .. }
         | ColumnValues::DeltaLengthBytes(_) | ColumnValues::DeltaBytes(_)) {
         w.field_i32(6, 0)?; // UTF8
     }
     Ok(())
+}
+
+fn fixed_width(values: &ColumnValues<'_>) -> Option<u32> {
+    match values {
+        ColumnValues::Fixed { width, .. } | ColumnValues::DictFixed { width, .. } => Some(*width),
+        _ => None,
+    }
 }
 
 fn write_row_group_meta(
@@ -449,12 +473,13 @@ fn encoding_list(column: &Column<'_>) -> ([i32; 3], u8) {
 fn physical_type(values: &ColumnValues<'_>) -> i32 {
     match values {
         ColumnValues::Bool(_) => 0,
-        ColumnValues::I32(_) | ColumnValues::DictI32 { .. } | ColumnValues::DeltaI32(_) => 1,
-        ColumnValues::I64(_) | ColumnValues::DeltaI64(_) => 2,
+        ColumnValues::I32(_) | ColumnValues::Date(_) | ColumnValues::DictI32 { .. } | ColumnValues::DeltaI32(_) => 1,
+        ColumnValues::I64(_) | ColumnValues::DictI64 { .. } | ColumnValues::DeltaI64(_) => 2,
         ColumnValues::F32(_) | ColumnValues::DictF32 { .. } => 4,
         ColumnValues::F64(_) | ColumnValues::DictF64 { .. } => 5,
         ColumnValues::Bytes(_) | ColumnValues::DictBytes { .. }
         | ColumnValues::DeltaLengthBytes(_) | ColumnValues::DeltaBytes(_) => 6,
+        ColumnValues::Fixed { .. } | ColumnValues::DictFixed { .. } => 7,
     }
 }
 
