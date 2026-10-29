@@ -74,6 +74,18 @@ fn plain_bool_uses_lsb_first_and_discards_padding() {
 }
 
 #[test]
+fn plain_bool_limited_feed_resumes_inside_the_byte() {
+    let mut d = PlainBool::new(4);
+    let mut result = Vec::new();
+    assert_eq!(d.feed_limited(&[0b0000_1101], 1, |v| result.push(v)).unwrap(), 1);
+    assert!(!d.is_complete());
+    assert_eq!(d.feed_limited(&[], 1, |v| result.push(v)).unwrap(), 0);
+    assert_eq!(d.feed_limited(&[], 8, |v| result.push(v)).unwrap(), 0);
+    assert_eq!(result, [true, false, true, true]);
+    d.finish().unwrap();
+}
+
+#[test]
 fn byte_arrays_stream_borrowed_fragments_and_empty_values() {
     let encoded = [
         2, 0, 0, 0, b'U', b'K',

@@ -122,11 +122,20 @@ impl<T: PlainValue> PlainValues<T> {
 }
 
 /// BOOLEAN PLAIN uses LSB-first bits; final byte may contain padding bits.
+///
+/// A limited feed may stop in the middle of a byte. The unread bits stay in `held` so the
+/// next call continues them; `used` counts only bytes the caller can drop.
 #[derive(Debug, Clone, Copy)]
-pub struct PlainBool { remaining: u64 }
+pub struct PlainBool {
+    remaining: u64,
+    bit: u8,
+    held: Option<u8>,
+}
 
 impl PlainBool {
-    pub const fn new(count: u64) -> Self { Self { remaining: count } }
+    pub const fn new(count: u64) -> Self {
+        Self { remaining: count, bit: 0, held: None }
+    }
     pub const fn is_complete(&self) -> bool { self.remaining == 0 }
     pub fn finish(&self) -> Result<()> {
         if self.is_complete() { Ok(()) } else { Err(Error::Truncated) }
@@ -146,18 +155,29 @@ impl PlainBool {
         }
         let mut at = 0;
         let mut emitted = 0usize;
-        while at < input.len() && self.remaining > 0 && emitted < max_values {
-            let byte = input[at];
-            at += 1;
-            let n = self.remaining.min(8) as u8;
-            for bit in 0..n {
-                if emitted >= max_values {
-                    return Ok(at);
+        while self.remaining > 0 && emitted < max_values {
+            if self.held.is_none() {
+                if at >= input.len() {
+                    break;
                 }
-                emit(byte & (1 << bit) != 0);
-                emitted += 1;
+                self.held = Some(input[at]);
+                at += 1;
+                self.bit = 0;
             }
-            self.remaining -= u64::from(n);
+            let byte = self.held.unwrap_or(0);
+            if self.bit >= 8 {
+                self.held = None;
+                self.bit = 0;
+                continue;
+            }
+            emit(byte & (1 << self.bit) != 0);
+            self.bit += 1;
+            self.remaining -= 1;
+            emitted += 1;
+            if self.bit == 8 || self.remaining == 0 {
+                self.held = None;
+                self.bit = 0;
+            }
         }
         Ok(at)
     }
