@@ -50,6 +50,8 @@ pub enum ColumnValues<'a> {
     Bytes(&'a [&'a [u8]]),
     /// `ids` has one entry per present row and indexes `dictionary`.
     DictI32 { dictionary: &'a [i32], ids: &'a [u32] },
+    DictF32 { dictionary: &'a [f32], ids: &'a [u32] },
+    DictF64 { dictionary: &'a [f64], ids: &'a [u32] },
     DictBytes { dictionary: &'a [&'a [u8]], ids: &'a [u32] },
     /// DELTA_BINARY_PACKED, blocks of 128 and four mini-blocks.
     DeltaI32(&'a [i32]),
@@ -304,7 +306,10 @@ fn value_count(values: &ColumnValues<'_>) -> usize {
         ColumnValues::F32(v) => v.len(),
         ColumnValues::F64(v) => v.len(),
         ColumnValues::Bytes(v) => v.len(),
-        ColumnValues::DictI32 { ids, .. } | ColumnValues::DictBytes { ids, .. } => ids.len(),
+        ColumnValues::DictI32 { ids, .. }
+        | ColumnValues::DictF32 { ids, .. }
+        | ColumnValues::DictF64 { ids, .. }
+        | ColumnValues::DictBytes { ids, .. } => ids.len(),
         ColumnValues::DeltaI32(v) => v.len(),
         ColumnValues::DeltaI64(v) => v.len(),
         ColumnValues::DeltaLengthBytes(v) | ColumnValues::DeltaBytes(v) => v.len(),
@@ -313,7 +318,10 @@ fn value_count(values: &ColumnValues<'_>) -> usize {
 
 pub(crate) fn value_encoding(values: &ColumnValues<'_>) -> i32 {
     match values {
-        ColumnValues::DictI32 { .. } | ColumnValues::DictBytes { .. } => 8,
+        ColumnValues::DictI32 { .. }
+        | ColumnValues::DictF32 { .. }
+        | ColumnValues::DictF64 { .. }
+        | ColumnValues::DictBytes { .. } => 8,
         ColumnValues::DeltaI32(_) | ColumnValues::DeltaI64(_) => 5,
         ColumnValues::DeltaLengthBytes(_) => 6,
         ColumnValues::DeltaBytes(_) => 7,
@@ -443,8 +451,8 @@ fn physical_type(values: &ColumnValues<'_>) -> i32 {
         ColumnValues::Bool(_) => 0,
         ColumnValues::I32(_) | ColumnValues::DictI32 { .. } | ColumnValues::DeltaI32(_) => 1,
         ColumnValues::I64(_) | ColumnValues::DeltaI64(_) => 2,
-        ColumnValues::F32(_) => 4,
-        ColumnValues::F64(_) => 5,
+        ColumnValues::F32(_) | ColumnValues::DictF32 { .. } => 4,
+        ColumnValues::F64(_) | ColumnValues::DictF64 { .. } => 5,
         ColumnValues::Bytes(_) | ColumnValues::DictBytes { .. }
         | ColumnValues::DeltaLengthBytes(_) | ColumnValues::DeltaBytes(_) => 6,
     }

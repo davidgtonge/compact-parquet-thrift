@@ -41,6 +41,22 @@ pub fn write_column_pages(
             uncompressed += stat.uncompressed_with_header;
             Some(stat.on_disk)
         }
+        ColumnValues::DictF32 { dictionary, .. } => {
+            let stat = write_dictionary_page(
+                &mut out[at..], codec, &ColumnValues::F32(dictionary), scratch, table,
+            )?;
+            at += stat.on_disk;
+            uncompressed += stat.uncompressed_with_header;
+            Some(stat.on_disk)
+        }
+        ColumnValues::DictF64 { dictionary, .. } => {
+            let stat = write_dictionary_page(
+                &mut out[at..], codec, &ColumnValues::F64(dictionary), scratch, table,
+            )?;
+            at += stat.on_disk;
+            uncompressed += stat.uncompressed_with_header;
+            Some(stat.on_disk)
+        }
         ColumnValues::DictBytes { dictionary, .. } => {
             let stat = write_dictionary_page(
                 &mut out[at..], codec, &ColumnValues::Bytes(dictionary), scratch, table,
@@ -107,8 +123,18 @@ fn encode_data_values(values: &ColumnValues<'_>, out: &mut [u8]) -> Result<usize
         ColumnValues::F32(v) => encode_f32(v, out),
         ColumnValues::F64(v) => encode_f64(v, out),
         ColumnValues::Bytes(v) => encode_bytes(v, out),
-        ColumnValues::DictI32 { dictionary, ids } => encode_dictionary_ids(dict_len(dictionary.len())?, ids, out),
-        ColumnValues::DictBytes { dictionary, ids } => encode_dictionary_ids(dict_len(dictionary.len())?, ids, out),
+        ColumnValues::DictI32 { dictionary, ids } => {
+            encode_dictionary_ids(dict_len(dictionary.len())?, ids, out)
+        }
+        ColumnValues::DictF32 { dictionary, ids } => {
+            encode_dictionary_ids(dict_len(dictionary.len())?, ids, out)
+        }
+        ColumnValues::DictF64 { dictionary, ids } => {
+            encode_dictionary_ids(dict_len(dictionary.len())?, ids, out)
+        }
+        ColumnValues::DictBytes { dictionary, ids } => {
+            encode_dictionary_ids(dict_len(dictionary.len())?, ids, out)
+        }
         ColumnValues::DeltaI32(v) => encode_delta_i32(v, out),
         ColumnValues::DeltaI64(v) => encode_delta_i64(v, out),
         ColumnValues::DeltaLengthBytes(v) => encode_delta_length_bytes(v, out),
@@ -118,7 +144,10 @@ fn encode_data_values(values: &ColumnValues<'_>, out: &mut [u8]) -> Result<usize
 
 fn encode_plain(values: &ColumnValues<'_>, out: &mut [u8]) -> Result<usize> {
     match values {
-        ColumnValues::DictI32 { .. } | ColumnValues::DictBytes { .. } => Err(EncodeError::ValueCount),
+        ColumnValues::DictI32 { .. }
+        | ColumnValues::DictF32 { .. }
+        | ColumnValues::DictF64 { .. }
+        | ColumnValues::DictBytes { .. } => Err(EncodeError::ValueCount),
         other => encode_data_values(other, out),
     }
 }
@@ -131,7 +160,10 @@ fn plain_len(values: &ColumnValues<'_>) -> usize {
         ColumnValues::F32(v) => v.len(),
         ColumnValues::F64(v) => v.len(),
         ColumnValues::Bytes(v) | ColumnValues::DeltaLengthBytes(v) | ColumnValues::DeltaBytes(v) => v.len(),
-        ColumnValues::DictI32 { .. } | ColumnValues::DictBytes { .. } => 0,
+        ColumnValues::DictI32 { .. }
+        | ColumnValues::DictF32 { .. }
+        | ColumnValues::DictF64 { .. }
+        | ColumnValues::DictBytes { .. } => 0,
         ColumnValues::DeltaI32(v) => v.len(),
         ColumnValues::DeltaI64(v) => v.len(),
     }
