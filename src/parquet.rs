@@ -50,6 +50,14 @@ pub struct ColumnChunkInfo<'a> {
     pub bloom_filter_offset: Option<i64>,
     /// `RowGroup.num_rows` for the group that owns this column. Not inferred from `num_values`.
     pub row_group_rows: Option<i64>,
+    /// Deprecated signed min (field 2). Prefer [`Self::min_value`].
+    pub min: Option<&'a [u8]>,
+    /// Deprecated signed max (field 1). Prefer [`Self::max_value`].
+    pub max: Option<&'a [u8]>,
+    pub min_value: Option<&'a [u8]>,
+    pub max_value: Option<&'a [u8]>,
+    pub null_count: Option<i64>,
+    pub distinct_count: Option<i64>,
 }
 
 /// Visit one `ColumnChunkInfo` at a time instead of collecting a Vec.
@@ -82,11 +90,30 @@ pub fn scan_footer<'a>(
     Ok(summary)
 }
 
+/// Columns that fit here are parsed in one pass. Wider row groups rewind
+/// and take a skip-then-emit walk so the stack frame stays bounded.
+const INLINE_COLUMNS: usize = 512;
+
 fn visit_row_group<'a>(
     reader: &mut Reader<'a>,
     row_group: u32,
     visit: &mut impl FnMut(ColumnChunkInfo<'a>) -> Result<()>,
 ) -> Result<u32> {
+    let start = reader.position();
+    if let Some(count) = try_inline_row_group(reader, row_group, visit)? {
+        return Ok(count);
+    }
+    reader.set_position(start)?;
+    let mut peek = reader.fork_at(start)?;
+    let rows = row_group_num_rows(&mut peek)?;
+    emit_row_group_columns(reader, row_group, rows, visit)
+}
+
+fn try_inline_row_group<'a>(
+    reader: &mut Reader<'a>,
+    row_group: u32,
+    visit: &mut impl FnMut(ColumnChunkInfo<'a>) -> Result<()>,
+) -> Result<Option<u32>> {
     let mut group = reader.structure()?;
     let mut count = 0;
     let mut rows = None;
@@ -95,7 +122,7 @@ fn visit_row_group<'a>(
         row_group: 0,
         index: 0,
         ..Default::default()
-    }; 512];
+    }; INLINE_COLUMNS];
     while let Some(field) = group.next_field()? {
         match field.id {
             1 => {
@@ -103,8 +130,10 @@ fn visit_row_group<'a>(
                 let header = group.list_header()?;
                 if header.element != WireType::Struct { return Err(Error::UnexpectedWireType); }
                 count = header.len;
+                if count as usize > pending.len() {
+                    return Ok(None);
+                }
                 for index in 0..header.len {
-                    if stored >= pending.len() { return Err(Error::IntegerOverflow); }
                     let mut info = ColumnChunkInfo { row_group, index, ..Default::default() };
                     visit_column_chunk(&mut group, &mut info)?;
                     pending[stored] = info;
@@ -118,9 +147,56 @@ fn visit_row_group<'a>(
             _ => group.skip(field.kind)?,
         }
     }
+    drop(group);
     for index in 0..stored {
         pending[index].row_group_rows = rows;
         visit(pending[index])?;
+    }
+    Ok(Some(count))
+}
+
+fn row_group_num_rows(reader: &mut Reader<'_>) -> Result<Option<i64>> {
+    let mut group = reader.structure()?;
+    let mut rows = None;
+    while let Some(field) = group.next_field()? {
+        if field.id == 3 {
+            field.expect(WireType::I64)?;
+            rows = Some(group.i64()?);
+        } else {
+            group.skip(field.kind)?;
+        }
+    }
+    Ok(rows)
+}
+
+fn emit_row_group_columns<'a>(
+    reader: &mut Reader<'a>,
+    row_group: u32,
+    rows: Option<i64>,
+    visit: &mut impl FnMut(ColumnChunkInfo<'a>) -> Result<()>,
+) -> Result<u32> {
+    let mut group = reader.structure()?;
+    let mut count = 0;
+    while let Some(field) = group.next_field()? {
+        match field.id {
+            1 => {
+                field.expect(WireType::List)?;
+                let header = group.list_header()?;
+                if header.element != WireType::Struct { return Err(Error::UnexpectedWireType); }
+                count = header.len;
+                for index in 0..header.len {
+                    let mut info = ColumnChunkInfo {
+                        row_group,
+                        index,
+                        row_group_rows: rows,
+                        ..Default::default()
+                    };
+                    visit_column_chunk(&mut group, &mut info)?;
+                    visit(info)?;
+                }
+            }
+            _ => group.skip(field.kind)?,
+        }
     }
     Ok(count)
 }
@@ -160,8 +236,25 @@ fn visit_column_metadata<'a>(reader: &mut Reader<'a>, info: &mut ColumnChunkInfo
             7 => { field.expect(WireType::I64)?; info.compressed_size = Some(meta.i64()?); }
             9 => { field.expect(WireType::I64)?; info.data_page_offset = Some(meta.i64()?); }
             11 => { field.expect(WireType::I64)?; info.dictionary_page_offset = Some(meta.i64()?); }
+            12 => { field.expect(WireType::Struct)?; visit_statistics(&mut meta, info)?; }
             14 => { field.expect(WireType::I64)?; info.bloom_filter_offset = Some(meta.i64()?); }
             _ => meta.skip(field.kind)?,
+        }
+    }
+    Ok(())
+}
+
+fn visit_statistics<'a>(reader: &mut Reader<'a>, info: &mut ColumnChunkInfo<'a>) -> Result<()> {
+    let mut stats = reader.structure()?;
+    while let Some(field) = stats.next_field()? {
+        match field.id {
+            1 => { field.expect(WireType::Binary)?; info.max = Some(stats.binary()?); }
+            2 => { field.expect(WireType::Binary)?; info.min = Some(stats.binary()?); }
+            3 => { field.expect(WireType::I64)?; info.null_count = Some(stats.i64()?); }
+            4 => { field.expect(WireType::I64)?; info.distinct_count = Some(stats.i64()?); }
+            5 => { field.expect(WireType::Binary)?; info.max_value = Some(stats.binary()?); }
+            6 => { field.expect(WireType::Binary)?; info.min_value = Some(stats.binary()?); }
+            _ => stats.skip(field.kind)?,
         }
     }
     Ok(())

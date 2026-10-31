@@ -101,6 +101,30 @@ impl<'a> Reader<'a> {
     pub const fn position(&self) -> usize { self.offset }
     pub fn remaining(&self) -> usize { self.input.len() - self.offset }
 
+    /// Independent cursor over the same window. Depth starts at zero so a
+    /// nested value can be walked twice without sharing the parent's budget.
+    pub fn fork_at(&self, offset: usize) -> Result<Reader<'a>> {
+        if offset > self.input.len() {
+            return Err(Error::EndOfInput);
+        }
+        Ok(Reader {
+            input: self.input,
+            offset,
+            depth: 0,
+            max_depth: self.max_depth,
+        })
+    }
+
+    /// Move this cursor. Depth is unchanged; do not call while a child
+    /// `StructReader` is still live.
+    pub fn set_position(&mut self, offset: usize) -> Result<()> {
+        if offset > self.input.len() {
+            return Err(Error::EndOfInput);
+        }
+        self.offset = offset;
+        Ok(())
+    }
+
     pub fn take(&mut self, len: usize) -> Result<&'a [u8]> {
         let end = self.offset.checked_add(len).ok_or(Error::IntegerOverflow)?;
         let result = self.input.get(self.offset..end).ok_or(Error::EndOfInput)?;

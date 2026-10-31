@@ -116,6 +116,17 @@ fn long_list_and_out_of_order_field_ids() {
 }
 
 #[test]
+fn set_position_rewinds_and_rejects_past_the_end() {
+    let input = [3, b'a', b'b', b'c'];
+    let mut r = Reader::new(&input);
+    assert_eq!(r.binary().unwrap(), b"abc");
+    assert_eq!(r.remaining(), 0);
+    r.set_position(0).unwrap();
+    assert_eq!(r.binary().unwrap(), b"abc");
+    assert_eq!(r.set_position(5), Err(Error::EndOfInput));
+}
+
+#[test]
 fn binary_returns_a_borrow_of_original_input() {
     let input = [3, b'a', b'b', b'c'];
     let mut r = Reader::new(&input);
