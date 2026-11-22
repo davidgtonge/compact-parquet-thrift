@@ -86,3 +86,8 @@ mod writer;
 pub use protocol::{Error, Result, WireType};
 pub use reader::{Field, ListHeader, MapHeader, Reader, StructReader};
 pub use writer::{Sink, SliceSink, Writer};
+
+/// Compile and run the README examples as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

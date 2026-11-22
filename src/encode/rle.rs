@@ -111,7 +111,11 @@ pub fn encode_hybrid(bit_width: u8, values: &[u32], out: &mut [u8]) -> Result<us
 /// V1 definition levels for a flat optional column: a 4-byte length followed
 /// by a bit-width-1 hybrid stream. A set bit in `present` means the row has a
 /// value. `present` must cover `rows` bits.
-pub(crate) fn encode_definition_levels(rows: usize, present: &[u8], out: &mut [u8]) -> Result<usize> {
+pub(crate) fn encode_definition_levels(
+    rows: usize,
+    present: &[u8],
+    out: &mut [u8],
+) -> Result<usize> {
     let need = rows.div_ceil(8);
     if present.len() < need {
         return Err(EncodeError::ValueCount);
@@ -140,7 +144,11 @@ pub(crate) const fn index_bit_width(dictionary_len: u32) -> u8 {
 }
 
 /// Dictionary-id payload: one bit-width byte, then the hybrid stream.
-pub(crate) fn encode_dictionary_ids(dictionary_len: u32, ids: &[u32], out: &mut [u8]) -> Result<usize> {
+pub(crate) fn encode_dictionary_ids(
+    dictionary_len: u32,
+    ids: &[u32],
+    out: &mut [u8],
+) -> Result<usize> {
     if ids.is_empty() {
         return Ok(0);
     }

@@ -2,11 +2,15 @@
 name = "compact-parquet-thrift"
 version = "0.2.0"
 edition = "2021"
+rust-version = "1.83"
 license = "MIT OR Apache-2.0"
 description = "Allocation-free Thrift Compact codec and bounded-memory Parquet page streaming"
-
-[features]
-default = []
+repository = "https://github.com/davidgtonge/compact-parquet-thrift"
+readme = "README.md"
+keywords = ["parquet", "thrift", "no-std", "wasm", "streaming"]
+categories = ["encoding", "parser-implementations", "no-std", "no-std::no-alloc", "wasm"]
+# Tests and their third-party fixtures stay in the repository.
+include = ["/src", "/examples", "/README.md", "/CHANGELOG.md", "/LICENSE*"]
 
 [dependencies]
 
