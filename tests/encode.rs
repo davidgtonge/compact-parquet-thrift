@@ -119,13 +119,7 @@ fn file_roundtrips_through_the_page_reader_and_duckdb() {
             values: ColumnValues::I32(&e_values),
         },
     ];
-    let mut places = [ChunkPlace {
-        offset: 0,
-        data_page_offset: 0,
-        dictionary_page_offset: None,
-        compressed_size: 0,
-        uncompressed_size: 0,
-    }; 5];
+    let mut places = [ChunkPlace::default(); 5];
     let mut scratch = vec![0u8; scratch_len(4, 64).unwrap()];
     let mut table = vec![0u32; 256];
     let mut file = vec![0u8; 16 * 1024];
@@ -242,6 +236,125 @@ fn file_roundtrips_through_the_page_reader_and_duckdb() {
     );
     let line = String::from_utf8_lossy(&output.stdout);
     assert_eq!(line.trim(), "4,20,1,6,1,11.0,3,10");
+}
+
+/// Integer and boolean chunks carry signed min/max (plain little-endian) and a null
+/// count; byte arrays and all-null chunks carry only the null count.
+#[test]
+fn footer_carries_chunk_statistics() {
+    let i32_present = [0b0000_1011u8]; // -5, 9, null, 2
+    let i32_values = [-5i32, 9, 2];
+    let dictionary = [70i64, -30, 12];
+    let ids = [0u32, 2, 0, 1];
+    let flags = [false, false, true, false];
+    let words: [&[u8]; 4] = [b"b", b"a", b"c", b"a"];
+    let nothing: [i64; 0] = [];
+    let all_null = [0u8];
+    let columns = [
+        Column {
+            name: "i32",
+            rows: 4,
+            codec: SNAPPY,
+            present: Some(&i32_present),
+            values: ColumnValues::I32(&i32_values),
+        },
+        Column {
+            name: "dict_i64",
+            rows: 4,
+            codec: UNCOMPRESSED,
+            present: None,
+            values: ColumnValues::DictI64 {
+                dictionary: &dictionary,
+                ids: &ids,
+            },
+        },
+        Column {
+            name: "bool",
+            rows: 4,
+            codec: UNCOMPRESSED,
+            present: None,
+            values: ColumnValues::Bool(&flags),
+        },
+        Column {
+            name: "bytes",
+            rows: 4,
+            codec: UNCOMPRESSED,
+            present: None,
+            values: ColumnValues::Bytes(&words),
+        },
+        Column {
+            name: "nulls",
+            rows: 4,
+            codec: UNCOMPRESSED,
+            present: Some(&all_null),
+            values: ColumnValues::I64(&nothing),
+        },
+    ];
+    let mut places = [ChunkPlace::default(); 5];
+    let mut scratch = vec![0u8; scratch_len(4, 64).unwrap()];
+    let mut table = vec![0u32; 256];
+    let mut file = vec![0u8; 16 * 1024];
+    let n = write_file(
+        &mut file,
+        4,
+        &columns,
+        &mut places,
+        &mut scratch,
+        &mut table,
+    )
+    .unwrap();
+    let file = &file[..n];
+    let tail: [u8; 8] = file[n - 8..].try_into().unwrap();
+    let range = footer_range(n as u64, &tail).unwrap();
+    let mut seen = Vec::new();
+    scan_footer(&file[range.start as usize..range.end as usize], |chunk| {
+        seen.push((
+            chunk.min_value.map(<[u8]>::to_vec),
+            chunk.max_value.map(<[u8]>::to_vec),
+            chunk.null_count,
+        ));
+        Ok(())
+    })
+    .unwrap();
+    let le32 = |v: i32| Some(v.to_le_bytes().to_vec());
+    let le64 = |v: i64| Some(v.to_le_bytes().to_vec());
+    assert_eq!(
+        seen,
+        vec![
+            (le32(-5), le32(9), Some(1)),
+            (le64(-30), le64(70), Some(0)),
+            (Some(vec![0]), Some(vec![1]), Some(0)),
+            (None, None, Some(0)),
+            (None, None, Some(4)),
+        ]
+    );
+
+    let duckdb = "/Users/addmaple/.duckdb/cli/latest/duckdb";
+    if !std::path::Path::new(duckdb).exists() {
+        return;
+    }
+    let path = std::env::temp_dir().join("compact-parquet-thrift-stats.parquet");
+    std::fs::write(&path, file).unwrap();
+    let sql = format!(
+        "SELECT string_agg(concat_ws(':', stats_min_value, stats_max_value, stats_null_count), ',' \
+         ORDER BY column_id) FROM parquet_metadata('{}')",
+        path.display()
+    );
+    let output = Command::new(duckdb)
+        .args(["-csv", "-noheader", "-c", &sql])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .trim_matches('"'),
+        "-5:9:1,-30:70:0,false:true:0,0,4"
+    );
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -536,13 +649,7 @@ fn delta_file_roundtrips_through_the_page_reader_and_duckdb() {
     let mut scratch = vec![0u8; scratch_len(rows, value_bytes).unwrap()];
     let mut table = vec![0u32; 256];
     let mut file = vec![0u8; 64 * 1024];
-    let mut places = [ChunkPlace {
-        offset: 0,
-        data_page_offset: 0,
-        dictionary_page_offset: None,
-        compressed_size: 0,
-        uncompressed_size: 0,
-    }; 4];
+    let mut places = [ChunkPlace::default(); 4];
     let columns = [
         Column {
             name: "a",

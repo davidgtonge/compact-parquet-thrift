@@ -13,6 +13,7 @@ mod page;
 mod plain;
 mod rle;
 mod snappy;
+mod stats;
 
 use crate::{SliceSink, WireType, Writer};
 use page::write_column_pages;
@@ -23,6 +24,7 @@ pub use delta::{
 };
 pub use rle::encode_hybrid;
 pub use snappy::compress as compress_snappy;
+pub use stats::{ChunkStats, ValueRange};
 
 pub const UNCOMPRESSED: i32 = 0;
 pub const SNAPPY: i32 = 1;
@@ -99,14 +101,16 @@ pub struct Column<'a> {
     pub values: ColumnValues<'a>,
 }
 
-/// Where one column chunk landed in the file. Offsets are absolute.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Where one column chunk landed in the file, and what its footer says about its values.
+/// Offsets are absolute.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ChunkPlace {
     pub offset: u64,
     pub data_page_offset: u64,
     pub dictionary_page_offset: Option<u64>,
     pub compressed_size: u64,
     pub uncompressed_size: u64,
+    pub stats: ChunkStats,
 }
 
 pub(crate) struct Cursor<'a> {
@@ -209,7 +213,7 @@ pub fn write_row_group(
     }
     let mut at = 0usize;
     for (column, place) in columns.iter().zip(places.iter_mut()) {
-        check_column(column, num_rows)?;
+        let present = check_column(column, num_rows)?;
         let stat = write_column_pages(
             &mut out[at..],
             column.rows,
@@ -229,6 +233,7 @@ pub fn write_row_group(
             compressed_size: u64::try_from(stat.on_disk).map_err(|_| EncodeError::Overflow)?,
             uncompressed_size: u64::try_from(stat.uncompressed_with_header)
                 .map_err(|_| EncodeError::Overflow)?,
+            stats: stats::chunk_stats(column.rows, &column.values, present),
         };
         at = at.checked_add(stat.on_disk).ok_or(EncodeError::Overflow)?;
     }
@@ -326,7 +331,8 @@ pub fn write_file(
     Ok(at.checked_add(footer).ok_or(EncodeError::Overflow)?)
 }
 
-fn check_column(column: &Column<'_>, num_rows: i64) -> Result<()> {
+/// Validate one column; returns how many rows are present.
+fn check_column(column: &Column<'_>, num_rows: i64) -> Result<usize> {
     if column.codec != UNCOMPRESSED && column.codec != SNAPPY {
         return Err(EncodeError::UnsupportedCodec);
     }
@@ -338,7 +344,7 @@ fn check_column(column: &Column<'_>, num_rows: i64) -> Result<()> {
     if present != value_count(&column.values) {
         return Err(EncodeError::ValueCount);
     }
-    Ok(())
+    Ok(present)
 }
 
 fn present_count(rows: usize, present: Option<&[u8]>) -> Result<usize> {
@@ -520,7 +526,7 @@ fn write_column_chunk(
                 i64::try_from(dictionary).map_err(|_| crate::Error::IntegerOverflow)?,
             )?;
         }
-        Ok(())
+        stats::write_statistics(w, &place.stats)
     })
 }
 
