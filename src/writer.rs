@@ -13,16 +13,30 @@ pub struct SliceSink<'a> {
 }
 
 impl<'a> SliceSink<'a> {
-    pub fn new(buffer: &'a mut [u8]) -> Self { Self { buffer, used: 0 } }
-    pub fn len(&self) -> usize { self.used }
-    pub fn is_empty(&self) -> bool { self.used == 0 }
-    pub fn as_written(&self) -> &[u8] { &self.buffer[..self.used] }
+    pub fn new(buffer: &'a mut [u8]) -> Self {
+        Self { buffer, used: 0 }
+    }
+    pub fn len(&self) -> usize {
+        self.used
+    }
+    pub fn is_empty(&self) -> bool {
+        self.used == 0
+    }
+    pub fn as_written(&self) -> &[u8] {
+        &self.buffer[..self.used]
+    }
 }
 
 impl Sink for SliceSink<'_> {
     fn write(&mut self, bytes: &[u8]) -> Result<()> {
-        let end = self.used.checked_add(bytes.len()).ok_or(Error::OutputFull)?;
-        let dst = self.buffer.get_mut(self.used..end).ok_or(Error::OutputFull)?;
+        let end = self
+            .used
+            .checked_add(bytes.len())
+            .ok_or(Error::OutputFull)?;
+        let dst = self
+            .buffer
+            .get_mut(self.used..end)
+            .ok_or(Error::OutputFull)?;
         dst.copy_from_slice(bytes);
         self.used = end;
         Ok(())
@@ -43,17 +57,31 @@ pub struct Writer<S: Sink> {
 
 impl<S: Sink> Writer<S> {
     pub fn new(sink: S) -> Self {
-        Self { sink, last_id: 0, depth: 0, max_depth: 64 }
+        Self {
+            sink,
+            last_id: 0,
+            depth: 0,
+            max_depth: 64,
+        }
     }
 
     pub fn with_max_depth(sink: S, max_depth: u16) -> Self {
-        Self { sink, last_id: 0, depth: 0, max_depth }
+        Self {
+            sink,
+            last_id: 0,
+            depth: 0,
+            max_depth,
+        }
     }
 
-    pub fn into_inner(self) -> S { self.sink }
+    pub fn into_inner(self) -> S {
+        self.sink
+    }
 
     pub fn structure(&mut self, f: impl FnOnce(&mut Self) -> Result<()>) -> Result<()> {
-        if self.depth >= self.max_depth { return Err(Error::DepthLimit); }
+        if self.depth >= self.max_depth {
+            return Err(Error::DepthLimit);
+        }
         self.depth += 1;
         let saved_id = core::mem::replace(&mut self.last_id, 0);
         let result = f(self).and_then(|_| self.sink.write(&[0]));
@@ -65,7 +93,9 @@ impl<S: Sink> Writer<S> {
     /// Write a field header. Call this before its payload (except boolean
     /// fields, whose values live in their headers).
     pub fn field_header(&mut self, id: i16, kind: WireType) -> Result<()> {
-        if self.depth == 0 { return Err(Error::UnexpectedStop); }
+        if self.depth == 0 {
+            return Err(Error::UnexpectedStop);
+        }
         let delta = (id as i32) - (self.last_id as i32);
         if (1..=15).contains(&delta) {
             self.sink.write(&[((delta as u8) << 4) | kind as u8])?;
@@ -78,7 +108,14 @@ impl<S: Sink> Writer<S> {
     }
 
     pub fn field_bool(&mut self, id: i16, value: bool) -> Result<()> {
-        self.field_header(id, if value { WireType::BoolTrue } else { WireType::BoolFalse })
+        self.field_header(
+            id,
+            if value {
+                WireType::BoolTrue
+            } else {
+                WireType::BoolFalse
+            },
+        )
     }
 
     pub fn field_i16(&mut self, id: i16, value: i16) -> Result<()> {
@@ -137,7 +174,9 @@ impl<S: Sink> Writer<S> {
             value >>= 7;
             buf[len] = b | if value != 0 { 0x80 } else { 0 };
             len += 1;
-            if value == 0 { break; }
+            if value == 0 {
+                break;
+            }
         }
         self.sink.write(&buf[..len])
     }
@@ -192,7 +231,9 @@ impl<S: Sink> Writer<S> {
 
     pub fn map_header(&mut self, key: WireType, value: WireType, len: u32) -> Result<()> {
         self.var_u32(len)?;
-        if len != 0 { self.byte(((key as u8) << 4) | value as u8)?; }
+        if len != 0 {
+            self.byte(((key as u8) << 4) | value as u8)?;
+        }
         Ok(())
     }
 }

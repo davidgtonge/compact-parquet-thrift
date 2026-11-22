@@ -1,7 +1,7 @@
 //! Parquet PLAIN encoding. All types use borrowed inputs and fixed-size state.
 
-use core::marker::PhantomData;
 use super::{Error, Result};
+use core::marker::PhantomData;
 
 mod sealed {
     pub trait Sealed {}
@@ -68,13 +68,24 @@ pub struct PlainValues<T: PlainValue> {
 
 impl<T: PlainValue> PlainValues<T> {
     pub const fn new(count: u64) -> Self {
-        Self { remaining: count, carry: [0; 12], filled: 0, marker: PhantomData }
+        Self {
+            remaining: count,
+            carry: [0; 12],
+            filled: 0,
+            marker: PhantomData,
+        }
     }
 
-    pub const fn is_complete(&self) -> bool { self.remaining == 0 && self.filled == 0 }
+    pub const fn is_complete(&self) -> bool {
+        self.remaining == 0 && self.filled == 0
+    }
 
     pub fn finish(&self) -> Result<()> {
-        if self.is_complete() { Ok(()) } else { Err(Error::Truncated) }
+        if self.is_complete() {
+            Ok(())
+        } else {
+            Err(Error::Truncated)
+        }
     }
 
     pub fn feed(&mut self, input: &[u8], emit: impl FnMut(T)) -> Result<usize> {
@@ -134,11 +145,21 @@ pub struct PlainBool {
 
 impl PlainBool {
     pub const fn new(count: u64) -> Self {
-        Self { remaining: count, bit: 0, held: None }
+        Self {
+            remaining: count,
+            bit: 0,
+            held: None,
+        }
     }
-    pub const fn is_complete(&self) -> bool { self.remaining == 0 }
+    pub const fn is_complete(&self) -> bool {
+        self.remaining == 0
+    }
     pub fn finish(&self) -> Result<()> {
-        if self.is_complete() { Ok(()) } else { Err(Error::Truncated) }
+        if self.is_complete() {
+            Ok(())
+        } else {
+            Err(Error::Truncated)
+        }
     }
     pub fn feed(&mut self, input: &[u8], emit: impl FnMut(bool)) -> Result<usize> {
         self.feed_limited(input, usize::MAX, emit)
@@ -212,12 +233,21 @@ impl ByteArrays {
         Self {
             remaining: count,
             max_value_bytes,
-            state: ByteState::Length { bytes: [0; 4], filled: 0 },
+            state: ByteState::Length {
+                bytes: [0; 4],
+                filled: 0,
+            },
         }
     }
-    pub const fn is_complete(&self) -> bool { self.remaining == 0 }
+    pub const fn is_complete(&self) -> bool {
+        self.remaining == 0
+    }
     pub fn finish(&self) -> Result<()> {
-        if self.is_complete() { Ok(()) } else { Err(Error::Truncated) }
+        if self.is_complete() {
+            Ok(())
+        } else {
+            Err(Error::Truncated)
+        }
     }
 
     pub fn feed<'a>(
@@ -229,7 +259,9 @@ impl ByteArrays {
         while self.remaining > 0 {
             match &mut self.state {
                 ByteState::Length { bytes, filled } => {
-                    if at == input.len() { break; }
+                    if at == input.len() {
+                        break;
+                    }
                     let n = (4 - *filled).min(input.len() - at);
                     bytes[*filled..*filled + n].copy_from_slice(&input[at..at + n]);
                     *filled += n;
@@ -238,7 +270,8 @@ impl ByteArrays {
                         let length = u32::from_le_bytes(*bytes);
                         if length > self.max_value_bytes {
                             return Err(Error::ValueTooLarge {
-                                length, limit: self.max_value_bytes,
+                                length,
+                                limit: self.max_value_bytes,
                             });
                         }
                         self.state = ByteState::Body { left: length };
@@ -249,10 +282,15 @@ impl ByteArrays {
                     if *left == 0 {
                         emit(ByteArrayEvent::End);
                         self.remaining -= 1;
-                        self.state = ByteState::Length { bytes: [0; 4], filled: 0 };
+                        self.state = ByteState::Length {
+                            bytes: [0; 4],
+                            filled: 0,
+                        };
                         continue;
                     }
-                    if at == input.len() { break; }
+                    if at == input.len() {
+                        break;
+                    }
                     let n = (*left as usize).min(input.len() - at);
                     emit(ByteArrayEvent::Chunk(&input[at..at + n]));
                     *left -= n as u32;
@@ -275,12 +313,24 @@ pub struct FixedByteArrays {
 
 impl FixedByteArrays {
     pub const fn new(count: u64, length: u32) -> Result<Self> {
-        if length == 0 { return Err(Error::InvalidFixedLength); }
-        Ok(Self { remaining: count, length, left: 0 })
+        if length == 0 {
+            return Err(Error::InvalidFixedLength);
+        }
+        Ok(Self {
+            remaining: count,
+            length,
+            left: 0,
+        })
     }
-    pub const fn is_complete(&self) -> bool { self.remaining == 0 }
+    pub const fn is_complete(&self) -> bool {
+        self.remaining == 0
+    }
     pub fn finish(&self) -> Result<()> {
-        if self.is_complete() { Ok(()) } else { Err(Error::Truncated) }
+        if self.is_complete() {
+            Ok(())
+        } else {
+            Err(Error::Truncated)
+        }
     }
     pub fn feed<'a>(
         &mut self,

@@ -14,8 +14,8 @@ mod plain;
 mod rle;
 mod snappy;
 
-use page::write_column_pages;
 use crate::{SliceSink, WireType, Writer};
+use page::write_column_pages;
 
 pub use delta::{
     delta_binary_bound, delta_byte_array_bound, delta_length_bound, encode_delta_bytes,
@@ -49,16 +49,38 @@ pub enum ColumnValues<'a> {
     F64(&'a [f64]),
     Bytes(&'a [&'a [u8]]),
     /// PLAIN FIXED_LEN_BYTE_ARRAY. Every value has length `width`.
-    Fixed { width: u32, values: &'a [&'a [u8]] },
+    Fixed {
+        width: u32,
+        values: &'a [&'a [u8]],
+    },
     /// INT32 with converted type DATE.
     Date(&'a [i32]),
     /// `ids` has one entry per present row and indexes `dictionary`.
-    DictI32 { dictionary: &'a [i32], ids: &'a [u32] },
-    DictI64 { dictionary: &'a [i64], ids: &'a [u32] },
-    DictF32 { dictionary: &'a [f32], ids: &'a [u32] },
-    DictF64 { dictionary: &'a [f64], ids: &'a [u32] },
-    DictBytes { dictionary: &'a [&'a [u8]], ids: &'a [u32] },
-    DictFixed { width: u32, dictionary: &'a [&'a [u8]], ids: &'a [u32] },
+    DictI32 {
+        dictionary: &'a [i32],
+        ids: &'a [u32],
+    },
+    DictI64 {
+        dictionary: &'a [i64],
+        ids: &'a [u32],
+    },
+    DictF32 {
+        dictionary: &'a [f32],
+        ids: &'a [u32],
+    },
+    DictF64 {
+        dictionary: &'a [f64],
+        ids: &'a [u32],
+    },
+    DictBytes {
+        dictionary: &'a [&'a [u8]],
+        ids: &'a [u32],
+    },
+    DictFixed {
+        width: u32,
+        dictionary: &'a [&'a [u8]],
+        ids: &'a [u32],
+    },
     /// DELTA_BINARY_PACKED, blocks of 128 and four mini-blocks.
     DeltaI32(&'a [i32]),
     DeltaI64(&'a [i64]),
@@ -93,12 +115,22 @@ pub(crate) struct Cursor<'a> {
 }
 
 impl<'a> Cursor<'a> {
-    pub(crate) fn new(buf: &'a mut [u8]) -> Self { Self { buf, at: 0 } }
-    pub(crate) fn position(&self) -> usize { self.at }
+    pub(crate) fn new(buf: &'a mut [u8]) -> Self {
+        Self { buf, at: 0 }
+    }
+    pub(crate) fn position(&self) -> usize {
+        self.at
+    }
 
     pub(crate) fn write(&mut self, bytes: &[u8]) -> Result<()> {
-        let end = self.at.checked_add(bytes.len()).ok_or(EncodeError::Overflow)?;
-        let dst = self.buf.get_mut(self.at..end).ok_or(EncodeError::OutputFull)?;
+        let end = self
+            .at
+            .checked_add(bytes.len())
+            .ok_or(EncodeError::Overflow)?;
+        let dst = self
+            .buf
+            .get_mut(self.at..end)
+            .ok_or(EncodeError::OutputFull)?;
         dst.copy_from_slice(bytes);
         self.at = end;
         Ok(())
@@ -112,7 +144,9 @@ impl<'a> Cursor<'a> {
             value >>= 7;
             buf[len] = byte | if value != 0 { 0x80 } else { 0 };
             len += 1;
-            if value == 0 { break; }
+            if value == 0 {
+                break;
+            }
         }
         self.write(&buf[..len])
     }
@@ -131,7 +165,9 @@ pub(crate) fn thrift_error(error: crate::Error) -> EncodeError {
 /// For delta columns, pass [`delta_binary_bound`], [`delta_length_bound`], or
 /// [`delta_byte_array_bound`].
 pub fn scratch_len(rows: usize, value_bytes: usize) -> Option<usize> {
-    rows.checked_mul(2)?.checked_add(16)?.checked_add(value_bytes)
+    rows.checked_mul(2)?
+        .checked_add(16)?
+        .checked_add(value_bytes)
 }
 
 pub const MAGIC_LEN: usize = 4;
@@ -217,11 +253,9 @@ pub fn write_footer(
             return Err(EncodeError::ValueCount);
         }
     }
-    let num_rows: i64 = row_groups
-        .iter()
-        .try_fold(0i64, |acc, rg| {
-            acc.checked_add(rg.num_rows).ok_or(EncodeError::Overflow)
-        })?;
+    let num_rows: i64 = row_groups.iter().try_fold(0i64, |acc, rg| {
+        acc.checked_add(rg.num_rows).ok_or(EncodeError::Overflow)
+    })?;
     let footer_thrift = write_footer_thrift(out, schema_columns, row_groups, num_rows)?;
     let footer_len = u32::try_from(footer_thrift).map_err(|_| EncodeError::Overflow)?;
     let at = footer_thrift;
@@ -244,9 +278,8 @@ fn offset_places(places: &mut [ChunkPlace], base: u64) -> Result<()> {
             .checked_add(base)
             .ok_or(EncodeError::Overflow)?;
         if let Some(dict) = place.dictionary_page_offset {
-            place.dictionary_page_offset = Some(
-                dict.checked_add(base).ok_or(EncodeError::Overflow)?,
-            );
+            place.dictionary_page_offset =
+                Some(dict.checked_add(base).ok_or(EncodeError::Overflow)?);
         }
     }
     Ok(())
@@ -268,8 +301,18 @@ pub fn write_file(
         return Err(EncodeError::ValueCount);
     }
     let mut at = write_magic(out)?;
-    let rg_len = write_row_group(&mut out[at..], num_rows, columns, places, scratch, snappy_table)?;
-    offset_places(places, u64::try_from(at).map_err(|_| EncodeError::Overflow)?)?;
+    let rg_len = write_row_group(
+        &mut out[at..],
+        num_rows,
+        columns,
+        places,
+        scratch,
+        snappy_table,
+    )?;
+    offset_places(
+        places,
+        u64::try_from(at).map_err(|_| EncodeError::Overflow)?,
+    )?;
     at = at.checked_add(rg_len).ok_or(EncodeError::Overflow)?;
     let footer = write_footer(
         &mut out[at..],
@@ -288,18 +331,28 @@ fn check_column(column: &Column<'_>, num_rows: i64) -> Result<()> {
         return Err(EncodeError::UnsupportedCodec);
     }
     let rows = i64::try_from(column.rows).map_err(|_| EncodeError::Overflow)?;
-    if rows != num_rows { return Err(EncodeError::ValueCount); }
+    if rows != num_rows {
+        return Err(EncodeError::ValueCount);
+    }
     let present = present_count(column.rows, column.present)?;
-    if present != value_count(&column.values) { return Err(EncodeError::ValueCount); }
+    if present != value_count(&column.values) {
+        return Err(EncodeError::ValueCount);
+    }
     Ok(())
 }
 
 fn present_count(rows: usize, present: Option<&[u8]>) -> Result<usize> {
-    let Some(bits) = present else { return Ok(rows); };
-    if bits.len() < rows.div_ceil(8) { return Err(EncodeError::ValueCount); }
+    let Some(bits) = present else {
+        return Ok(rows);
+    };
+    if bits.len() < rows.div_ceil(8) {
+        return Err(EncodeError::ValueCount);
+    }
     let mut count = 0usize;
     for row in 0..rows {
-        if bits[row >> 3] & (1 << (row & 7)) != 0 { count += 1; }
+        if bits[row >> 3] & (1 << (row & 7)) != 0 {
+            count += 1;
+        }
     }
     Ok(count)
 }
@@ -381,8 +434,13 @@ fn write_schema_leaf(w: &mut Writer<SliceSink<'_>>, column: &Column<'_>) -> crat
     w.field_binary(4, column.name.as_bytes())?;
     if matches!(column.values, ColumnValues::Date(_)) {
         w.field_i32(6, 6)?; // DATE
-    } else if matches!(column.values, ColumnValues::Bytes(_) | ColumnValues::DictBytes { .. }
-        | ColumnValues::DeltaLengthBytes(_) | ColumnValues::DeltaBytes(_)) {
+    } else if matches!(
+        column.values,
+        ColumnValues::Bytes(_)
+            | ColumnValues::DictBytes { .. }
+            | ColumnValues::DeltaLengthBytes(_)
+            | ColumnValues::DeltaBytes(_)
+    ) {
         w.field_i32(6, 0)?; // UTF8
     }
     Ok(())
@@ -417,7 +475,9 @@ fn sum_i64(values: impl Iterator<Item = u64>) -> crate::Result<i64> {
     let mut total = 0i64;
     for value in values {
         let value = i64::try_from(value).map_err(|_| crate::Error::IntegerOverflow)?;
-        total = total.checked_add(value).ok_or(crate::Error::IntegerOverflow)?;
+        total = total
+            .checked_add(value)
+            .ok_or(crate::Error::IntegerOverflow)?;
     }
     Ok(total)
 }
@@ -428,9 +488,12 @@ fn write_column_chunk(
     place: &ChunkPlace,
 ) -> crate::Result<()> {
     let offset = i64::try_from(place.offset).map_err(|_| crate::Error::IntegerOverflow)?;
-    let uncompressed = i64::try_from(place.uncompressed_size).map_err(|_| crate::Error::IntegerOverflow)?;
-    let compressed = i64::try_from(place.compressed_size).map_err(|_| crate::Error::IntegerOverflow)?;
-    let data_page = i64::try_from(place.data_page_offset).map_err(|_| crate::Error::IntegerOverflow)?;
+    let uncompressed =
+        i64::try_from(place.uncompressed_size).map_err(|_| crate::Error::IntegerOverflow)?;
+    let compressed =
+        i64::try_from(place.compressed_size).map_err(|_| crate::Error::IntegerOverflow)?;
+    let data_page =
+        i64::try_from(place.data_page_offset).map_err(|_| crate::Error::IntegerOverflow)?;
     w.field_i64(2, offset)?;
     w.field_struct(3, |w| {
         w.field_i32(1, physical_type(&column.values))?;
@@ -444,12 +507,18 @@ fn write_column_chunk(
         w.list_header(WireType::Binary, 1)?;
         w.binary(column.name.as_bytes())?;
         w.field_i32(4, column.codec)?;
-        w.field_i64(5, i64::try_from(column.rows).map_err(|_| crate::Error::IntegerOverflow)?)?;
+        w.field_i64(
+            5,
+            i64::try_from(column.rows).map_err(|_| crate::Error::IntegerOverflow)?,
+        )?;
         w.field_i64(6, uncompressed)?;
         w.field_i64(7, compressed)?;
         w.field_i64(9, data_page)?;
         if let Some(dictionary) = place.dictionary_page_offset {
-            w.field_i64(11, i64::try_from(dictionary).map_err(|_| crate::Error::IntegerOverflow)?)?;
+            w.field_i64(
+                11,
+                i64::try_from(dictionary).map_err(|_| crate::Error::IntegerOverflow)?,
+            )?;
         }
         Ok(())
     })
@@ -473,12 +542,17 @@ fn encoding_list(column: &Column<'_>) -> ([i32; 3], u8) {
 fn physical_type(values: &ColumnValues<'_>) -> i32 {
     match values {
         ColumnValues::Bool(_) => 0,
-        ColumnValues::I32(_) | ColumnValues::Date(_) | ColumnValues::DictI32 { .. } | ColumnValues::DeltaI32(_) => 1,
+        ColumnValues::I32(_)
+        | ColumnValues::Date(_)
+        | ColumnValues::DictI32 { .. }
+        | ColumnValues::DeltaI32(_) => 1,
         ColumnValues::I64(_) | ColumnValues::DictI64 { .. } | ColumnValues::DeltaI64(_) => 2,
         ColumnValues::F32(_) | ColumnValues::DictF32 { .. } => 4,
         ColumnValues::F64(_) | ColumnValues::DictF64 { .. } => 5,
-        ColumnValues::Bytes(_) | ColumnValues::DictBytes { .. }
-        | ColumnValues::DeltaLengthBytes(_) | ColumnValues::DeltaBytes(_) => 6,
+        ColumnValues::Bytes(_)
+        | ColumnValues::DictBytes { .. }
+        | ColumnValues::DeltaLengthBytes(_)
+        | ColumnValues::DeltaBytes(_) => 6,
         ColumnValues::Fixed { .. } | ColumnValues::DictFixed { .. } => 7,
     }
 }
@@ -578,7 +652,8 @@ fn write_copied_column_chunk<'a>(
     w: &mut Writer<SliceSink<'_>>,
     column: &CopiedColumnMeta<'a>,
 ) -> crate::Result<()> {
-    let chunk_start = i64::try_from(column.data_page_offset).map_err(|_| crate::Error::IntegerOverflow)?;
+    let chunk_start =
+        i64::try_from(column.data_page_offset).map_err(|_| crate::Error::IntegerOverflow)?;
     let data_page = chunk_start;
     w.field_i64(2, chunk_start)?;
     w.field_struct(3, |w| {

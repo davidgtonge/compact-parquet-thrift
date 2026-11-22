@@ -1,13 +1,15 @@
 use compact_parquet_thrift::values::{
-    ByteArrayEvent as E, ByteArrays, DictionaryIds, Error, FixedByteArrays, HybridRle,
-    Int96, Levels, PlainBool, PlainValues,
+    ByteArrayEvent as E, ByteArrays, DictionaryIds, Error, FixedByteArrays, HybridRle, Int96,
+    Levels, PlainBool, PlainValues,
 };
 
 #[test]
 fn plain_i32_i64_float_double_and_int96_are_chunk_independent() {
     let values = [-12i32, 0, i32::MAX, i32::MIN, 101];
     let mut encoded = Vec::new();
-    for v in values { encoded.extend_from_slice(&v.to_le_bytes()); }
+    for v in values {
+        encoded.extend_from_slice(&v.to_le_bytes());
+    }
     for chunk_size in 1..=encoded.len() {
         let mut d = PlainValues::<i32>::new(values.len() as u64);
         let mut decoded = Vec::new();
@@ -23,7 +25,9 @@ fn plain_i32_i64_float_double_and_int96_are_chunk_independent() {
     let mut encoded = Vec::new();
     encoded.extend_from_slice(&i64::MIN.to_le_bytes());
     encoded.extend_from_slice(&i64::MAX.to_le_bytes());
-    for bytes in encoded.chunks(3) { d.feed(bytes, |x| got.push(x)).unwrap(); }
+    for bytes in encoded.chunks(3) {
+        d.feed(bytes, |x| got.push(x)).unwrap();
+    }
     assert_eq!(got, [i64::MIN, i64::MAX]);
     d.finish().unwrap();
 
@@ -33,8 +37,17 @@ fn plain_i32_i64_float_double_and_int96_are_chunk_independent() {
     encoded.extend_from_slice(&(-0.0f32).to_le_bytes());
     encoded.extend_from_slice(&f32::INFINITY.to_le_bytes());
     let mut got = Vec::new();
-    for bytes in encoded.chunks(1) { d.feed(bytes, |v| got.push(v.to_bits())).unwrap(); }
-    assert_eq!(got, [1.25f32.to_bits(), (-0.0f32).to_bits(), f32::INFINITY.to_bits()]);
+    for bytes in encoded.chunks(1) {
+        d.feed(bytes, |v| got.push(v.to_bits())).unwrap();
+    }
+    assert_eq!(
+        got,
+        [
+            1.25f32.to_bits(),
+            (-0.0f32).to_bits(),
+            f32::INFINITY.to_bits()
+        ]
+    );
     d.finish().unwrap();
 
     let mut d = PlainValues::<f64>::new(1);
@@ -48,7 +61,9 @@ fn plain_i32_i64_float_double_and_int96_are_chunk_independent() {
     let mut d = PlainValues::<Int96>::new(1);
     let mut got = Vec::new();
     let input: [u8; 12] = core::array::from_fn(|i| i as u8);
-    for bytes in input.chunks(5) { d.feed(bytes, |v| got.push(v)).unwrap(); }
+    for bytes in input.chunks(5) {
+        d.feed(bytes, |v| got.push(v)).unwrap();
+    }
     assert_eq!(got, [Int96(input)]);
     d.finish().unwrap();
 }
@@ -69,7 +84,10 @@ fn plain_bool_uses_lsb_first_and_discards_padding() {
     let mut result = Vec::new();
     assert_eq!(d.feed(&[0b1010_0110], |v| result.push(v)).unwrap(), 1);
     assert_eq!(d.feed(&[0b1111_1111, 0], |v| result.push(v)).unwrap(), 1);
-    assert_eq!(result, [false, true, true, false, false, true, false, true, true, true]);
+    assert_eq!(
+        result,
+        [false, true, true, false, false, true, false, true, true, true]
+    );
     d.finish().unwrap();
 }
 
@@ -77,7 +95,11 @@ fn plain_bool_uses_lsb_first_and_discards_padding() {
 fn plain_bool_limited_feed_resumes_inside_the_byte() {
     let mut d = PlainBool::new(4);
     let mut result = Vec::new();
-    assert_eq!(d.feed_limited(&[0b0000_1101], 1, |v| result.push(v)).unwrap(), 1);
+    assert_eq!(
+        d.feed_limited(&[0b0000_1101], 1, |v| result.push(v))
+            .unwrap(),
+        1
+    );
     assert!(!d.is_complete());
     assert_eq!(d.feed_limited(&[], 1, |v| result.push(v)).unwrap(), 0);
     assert_eq!(d.feed_limited(&[], 8, |v| result.push(v)).unwrap(), 0);
@@ -88,20 +110,32 @@ fn plain_bool_limited_feed_resumes_inside_the_byte() {
 #[test]
 fn byte_arrays_stream_borrowed_fragments_and_empty_values() {
     let encoded = [
-        2, 0, 0, 0, b'U', b'K',
-        0, 0, 0, 0,
-        5, 0, 0, 0, b'h', b'e', b'l', b'l', b'o',
+        2, 0, 0, 0, b'U', b'K', 0, 0, 0, 0, 5, 0, 0, 0, b'h', b'e', b'l', b'l', b'o',
     ];
     for size in 1..=encoded.len() {
         let mut d = ByteArrays::new(3, 100);
         let mut strings = Vec::<Vec<u8>>::new();
         let mut active = false;
         for bytes in encoded.chunks(size) {
-            assert_eq!(d.feed(bytes, |event| match event {
-                E::Start(_) => { assert!(!active); active = true; strings.push(Vec::new()); },
-                E::Chunk(data) => { assert!(active); strings.last_mut().unwrap().extend(data); },
-                E::End => { assert!(active); active = false; },
-            }).unwrap(), bytes.len());
+            assert_eq!(
+                d.feed(bytes, |event| match event {
+                    E::Start(_) => {
+                        assert!(!active);
+                        active = true;
+                        strings.push(Vec::new());
+                    }
+                    E::Chunk(data) => {
+                        assert!(active);
+                        strings.last_mut().unwrap().extend(data);
+                    }
+                    E::End => {
+                        assert!(active);
+                        active = false;
+                    }
+                })
+                .unwrap(),
+                bytes.len()
+            );
         }
         d.finish().unwrap();
         assert!(!active);
@@ -112,8 +146,13 @@ fn byte_arrays_stream_borrowed_fragments_and_empty_values() {
 #[test]
 fn byte_arrays_reject_huge_lengths_without_allocating() {
     let mut d = ByteArrays::new(1, 64);
-    assert_eq!(d.feed(&1000u32.to_le_bytes(), |_| {}),
-        Err(Error::ValueTooLarge { length: 1000, limit: 64 }));
+    assert_eq!(
+        d.feed(&1000u32.to_le_bytes(), |_| {}),
+        Err(Error::ValueTooLarge {
+            length: 1000,
+            limit: 64
+        })
+    );
     let mut d = ByteArrays::new(1, 64);
     d.feed(&[5, 0, 0, 0, b'a'], |_| {}).unwrap();
     assert_eq!(d.finish(), Err(Error::Truncated));
@@ -125,15 +164,25 @@ fn fixed_byte_arrays_stream_value_parts() {
     let mut parts = Vec::new();
     let mut current: Vec<u8> = Vec::new();
     for b in b"abcdef".chunks(2) {
-        assert_eq!(d.feed(b, |event| match event {
-            E::Start(n) => { assert_eq!(n, 3); current.clear(); },
-            E::Chunk(p) => current.extend(p),
-            E::End => parts.push(current.clone()),
-        }).unwrap(), b.len());
+        assert_eq!(
+            d.feed(b, |event| match event {
+                E::Start(n) => {
+                    assert_eq!(n, 3);
+                    current.clear();
+                }
+                E::Chunk(p) => current.extend(p),
+                E::End => parts.push(current.clone()),
+            })
+            .unwrap(),
+            b.len()
+        );
     }
     assert_eq!(parts, [b"abc".to_vec(), b"def".to_vec()]);
     d.finish().unwrap();
-    assert!(matches!(FixedByteArrays::new(1, 0), Err(Error::InvalidFixedLength)));
+    assert!(matches!(
+        FixedByteArrays::new(1, 0),
+        Err(Error::InvalidFixedLength)
+    ));
 }
 
 fn decode_hybrid(bit_width: u8, bytes: &[u8], count: usize, chunk_size: usize) -> Vec<u32> {
@@ -150,7 +199,7 @@ fn decode_hybrid(bit_width: u8, bytes: &[u8], count: usize, chunk_size: usize) -
 fn hybrid_mixed_runs_and_split_varints() {
     // RLE run: 5 copies of 3; bitpacked run: [0,1,2,3,0,1,2,3]
     let input = [0x0a, 0x03, 0x03, 0xe4, 0xe4];
-    let expected = [3,3,3,3,3, 0,1,2,3,0,1,2,3];
+    let expected = [3, 3, 3, 3, 3, 0, 1, 2, 3, 0, 1, 2, 3];
     for size in 1..=input.len() {
         assert_eq!(decode_hybrid(2, &input, 13, size), expected);
     }
@@ -164,13 +213,13 @@ fn hybrid_rle_feed_limited_resumes_mid_repeat_run() {
     let input = [0x0a, 0x03, 0x03]; // 5 repeats of value 3
     let mut d = HybridRle::new(2, 5).unwrap();
     let mut first = Vec::new();
-    assert_eq!(
-        d.feed_limited(&input, 2, |v| first.push(v)).unwrap(),
-        2
-    );
+    assert_eq!(d.feed_limited(&input, 2, |v| first.push(v)).unwrap(), 2);
     assert_eq!(first, [3, 3]);
     let mut second = Vec::new();
-    assert_eq!(d.feed_limited(&input[2..], 3, |v| second.push(v)).unwrap(), 0);
+    assert_eq!(
+        d.feed_limited(&input[2..], 3, |v| second.push(v)).unwrap(),
+        0
+    );
     assert_eq!(second, [3, 3, 3]);
     d.finish().unwrap();
 }
@@ -189,10 +238,7 @@ fn hybrid_rle_feed_limited_resumes_mid_packed_group() {
     );
     assert_eq!(first, [0, 1, 2]);
     let mut second = Vec::new();
-    assert_eq!(
-        d.feed_limited(&[], 5, |v| second.push(v)).unwrap(),
-        0
-    );
+    assert_eq!(d.feed_limited(&[], 5, |v| second.push(v)).unwrap(), 0);
     assert_eq!(second, [3, 4, 5, 6, 7]);
     d.finish().unwrap();
 }
@@ -213,7 +259,11 @@ fn pack_bit_group(bits: u8, values: &[u32; 8]) -> Vec<u8> {
 #[test]
 fn hybrid_bitpacking_across_all_widths_with_padding() {
     for bits in [0, 1, 2, 3, 7, 8, 9, 16, 24, 31, 32] {
-        let mask = if bits == 32 { u32::MAX } else { (1u32 << bits) - 1 };
+        let mask = if bits == 32 {
+            u32::MAX
+        } else {
+            (1u32 << bits) - 1
+        };
         let values = core::array::from_fn::<_, 8, _>(|i| {
             (u32::MAX.rotate_left(i as u32) ^ (i as u32 * 17)) & mask
         });
@@ -234,7 +284,10 @@ fn hybrid_zero_width_repeated_and_bitpacked() {
 
 #[test]
 fn hybrid_rejects_invalid_counts_widths_and_values() {
-    assert!(matches!(HybridRle::new(33, 1), Err(Error::InvalidBitWidth(33))));
+    assert!(matches!(
+        HybridRle::new(33, 1),
+        Err(Error::InvalidBitWidth(33))
+    ));
     let mut d = HybridRle::new(1, 1).unwrap();
     assert_eq!(d.feed(&[0], |_| {}), Err(Error::InvalidRun));
     // A run longer than the logical count is padding, but the payload
@@ -246,8 +299,10 @@ fn hybrid_rejects_invalid_counts_widths_and_values() {
     assert_eq!(d.feed(&[5], |_| {}), Ok(1));
     assert_eq!(d.finish(), Err(Error::Truncated));
     let mut d = HybridRle::new(2, 1).unwrap().with_max_value(1);
-    assert_eq!(d.feed(&[2, 3], |_| {}),
-        Err(Error::ValueOutOfRange { value: 3, max: 1 }));
+    assert_eq!(
+        d.feed(&[2, 3], |_| {}),
+        Err(Error::ValueOutOfRange { value: 3, max: 1 })
+    );
     let mut d = HybridRle::new(1, 130).unwrap();
     assert_eq!(d.feed(&[0x84], |_| {}).unwrap(), 1);
     assert_eq!(d.finish(), Err(Error::Truncated));
@@ -265,13 +320,18 @@ fn dictionary_ids_validate_bounds_and_do_not_materialize_strings() {
         for bytes in encoded.chunks(chunk_size) {
             assert_eq!(d.feed(bytes, |id| ids.push(id)).unwrap(), bytes.len());
         }
-        assert_eq!(ids, [2,2,2,2,2,0,1,2,3,0,1,2,3]);
+        assert_eq!(ids, [2, 2, 2, 2, 2, 0, 1, 2, 3, 0, 1, 2, 3]);
         d.finish().unwrap();
     }
     let mut invalid = DictionaryIds::new(1, 3).unwrap();
-    assert_eq!(invalid.feed(&[2, 2, 3], |_| {}),
-        Err(Error::ValueOutOfRange { value: 3, max: 2 }));
-    assert!(matches!(DictionaryIds::new(1, 0), Err(Error::EmptyDictionary)));
+    assert_eq!(
+        invalid.feed(&[2, 2, 3], |_| {}),
+        Err(Error::ValueOutOfRange { value: 3, max: 2 })
+    );
+    assert!(matches!(
+        DictionaryIds::new(1, 0),
+        Err(Error::EmptyDictionary)
+    ));
 }
 
 #[test]
@@ -288,7 +348,9 @@ fn v1_v2_levels_are_length_framed_and_stop_before_values() {
             let offered = end - at;
             let used = d.feed(&v1[at..end], |v| vals.push(v)).unwrap();
             at += used;
-            if used < offered { break; }
+            if used < offered {
+                break;
+            }
         }
         d.finish().unwrap();
         assert_eq!(at, 6);
@@ -308,8 +370,13 @@ fn v1_v2_levels_are_length_framed_and_stop_before_values() {
 #[test]
 fn levels_reject_invalid_sizes_and_truncated_frames() {
     let mut d = Levels::v1(1, 5, 64).unwrap();
-    assert_eq!(d.feed(&[200,0,0,0], |_| {}),
-        Err(Error::FrameTooLarge { length: 200, limit: 64 }));
+    assert_eq!(
+        d.feed(&[200, 0, 0, 0], |_| {}),
+        Err(Error::FrameTooLarge {
+            length: 200,
+            limit: 64
+        })
+    );
     let mut d = Levels::v2(1, 5, 1).unwrap();
     assert_eq!(d.feed(&[0x0a, 1], |_| {}).unwrap(), 1);
     assert_eq!(d.finish(), Err(Error::Truncated));
@@ -344,7 +411,7 @@ fn rle_boolean_uses_length_prefix_for_both_page_versions() {
         for bytes in encoded.chunks(size) {
             assert_eq!(d.feed(bytes, |b| got.push(b)).unwrap(), bytes.len());
         }
-        assert_eq!(got, [true,true,true,false,false,false,false]);
+        assert_eq!(got, [true, true, true, false, false, false, false]);
         d.finish().unwrap();
     }
 }
@@ -359,10 +426,12 @@ fn rle_boolean_feed_limited_emits_one_value_at_a_time() {
     let mut after_first = None;
     while got.len() < 7 {
         let mut one = None;
-        let used = d.feed_limited(rest, 1, |b| {
-            assert!(one.is_none());
-            one = Some(b);
-        }).unwrap();
+        let used = d
+            .feed_limited(rest, 1, |b| {
+                assert!(one.is_none());
+                one = Some(b);
+            })
+            .unwrap();
         assert!(used <= rest.len());
         if used == 0 && one.is_none() {
             panic!("decoder stalled after {got:?}");
@@ -386,8 +455,10 @@ fn rle_three_bit_packing_matches_apache_spec_example() {
     // The Parquet spec specifies [0,1,2,3,4,5,6,7] in 3-bit LSB packing
     // as 0x88, 0xC6, 0xFA.
     for size in 1..=4 {
-        assert_eq!(decode_hybrid(3, &[0x03, 0x88, 0xc6, 0xfa], 8, size),
-            [0,1,2,3,4,5,6,7]);
+        assert_eq!(
+            decode_hybrid(3, &[0x03, 0x88, 0xc6, 0xfa], 8, size),
+            [0, 1, 2, 3, 4, 5, 6, 7]
+        );
     }
 }
 
@@ -407,20 +478,24 @@ fn partial_final_packed_group_is_fully_consumed() {
     // Two 8-value groups, with only 9 logical values and 7 padding values.
     let input = [5, 0b0101_0101, 0b1111_1111];
     for size in 1..=3 {
-        assert_eq!(decode_hybrid(1, &input, 9, size),
-            [true, false, true, false, true, false, true, false, true]
-                .map(u32::from));
+        assert_eq!(
+            decode_hybrid(1, &input, 9, size),
+            [true, false, true, false, true, false, true, false, true].map(u32::from)
+        );
     }
 }
 
 #[test]
 fn byte_array_payload_is_borrowed_from_the_input_chunk() {
-    let input = [3,0,0,0, b'a', b'b', b'c'];
+    let input = [3, 0, 0, 0, b'a', b'b', b'c'];
     let mut d = ByteArrays::new(1, 10);
     let expected = input[4..].as_ptr();
     d.feed(&input, |event| {
-        if let E::Chunk(part) = event { assert_eq!(part.as_ptr(), expected); }
-    }).unwrap();
+        if let E::Chunk(part) = event {
+            assert_eq!(part.as_ptr(), expected);
+        }
+    })
+    .unwrap();
     d.finish().unwrap();
 }
 
@@ -453,8 +528,14 @@ fn hybrid_rle_feed_limited_takes_many_values_per_call() {
         let mut at = 0;
         while !d.is_complete() {
             let before = out.len();
-            at += d.feed_limited(&encoded[at..], limit, |v| out.push(v)).unwrap();
-            assert!(out.len() > before, "limit {limit}: no progress at {} values", out.len());
+            at += d
+                .feed_limited(&encoded[at..], limit, |v| out.push(v))
+                .unwrap();
+            assert!(
+                out.len() > before,
+                "limit {limit}: no progress at {} values",
+                out.len()
+            );
             assert!(out.len() - before <= limit);
         }
         assert_eq!(out, values, "limit {limit}");

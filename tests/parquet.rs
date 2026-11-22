@@ -15,7 +15,8 @@ fn inspect(bytes: &[u8], expected_rows: i64, expected_columns: u64) {
         assert!(column.codec.is_some());
         visited += 1;
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
     assert_eq!(summary.num_rows, Some(expected_rows));
     assert_eq!(summary.row_groups, 1);
     assert_eq!(summary.columns, expected_columns);
@@ -24,12 +25,20 @@ fn inspect(bytes: &[u8], expected_rows: i64, expected_columns: u64) {
 
 #[test]
 fn genuine_flat_and_list_parquet_file() {
-    inspect(include_bytes!("fixtures/list_field_values_file.parquet"), 5, 7);
+    inspect(
+        include_bytes!("fixtures/list_field_values_file.parquet"),
+        5,
+        7,
+    );
 }
 
 #[test]
 fn genuine_nested_parquet_file() {
-    inspect(include_bytes!("fixtures/list_nested_struct_file.parquet"), 3, 7);
+    inspect(
+        include_bytes!("fixtures/list_nested_struct_file.parquet"),
+        3,
+        7,
+    );
 }
 
 #[test]
@@ -55,7 +64,8 @@ fn page_header_exposes_v1_and_dictionary_encodings() {
             w.field_i32(4, 3)?; // RLE
             Ok(())
         })
-    }).unwrap();
+    })
+    .unwrap();
     let written = w.into_inner();
     let (head, len) = compact_parquet_thrift::parquet::page_header(written.as_written()).unwrap();
     assert_eq!(len, written.as_written().len());
@@ -157,7 +167,8 @@ fn dictionary_page_header_exposes_physical_value_encoding() {
             w.field_i32(1, 3)?;
             w.field_i32(2, 0) // PLAIN
         })
-    }).unwrap();
+    })
+    .unwrap();
     let written = w.into_inner();
     let (head, _) = compact_parquet_thrift::parquet::page_header(written.as_written()).unwrap();
     assert_eq!(head.dictionary_num_values, Some(3));

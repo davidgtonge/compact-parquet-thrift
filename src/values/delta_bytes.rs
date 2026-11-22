@@ -9,13 +9,24 @@
 use super::{ByteArrayEvent, DeltaBinary, Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Phase { Lengths, Prefixes, Suffixes, Bodies, Done }
+enum Phase {
+    Lengths,
+    Prefixes,
+    Suffixes,
+    Bodies,
+    Done,
+}
 
 fn valid_length(value: i32, max_length: u32) -> Result<u32> {
-    if value < 0 { return Err(Error::InvalidDeltaLength(value)); }
+    if value < 0 {
+        return Err(Error::InvalidDeltaLength(value));
+    }
     let value = value as u32;
     if value > max_length {
-        return Err(Error::ValueTooLarge { length: value, limit: max_length });
+        return Err(Error::ValueTooLarge {
+            length: value,
+            limit: max_length,
+        });
     }
     Ok(value)
 }
@@ -47,19 +58,32 @@ impl<'a> DeltaLengthByteArrays<'a> {
     ) -> Result<Self> {
         if lengths.len() < count {
             return Err(Error::DeltaWorkspaceTooSmall {
-                needed: count, available: lengths.len(),
+                needed: count,
+                available: lengths.len(),
             });
         }
         Ok(Self {
-            lengths, delta: DeltaBinary::new(count as u64, widths),
-            count, max_length, parsed: 0, index: 0, left: 0,
-            started: false, phase: Phase::Lengths,
+            lengths,
+            delta: DeltaBinary::new(count as u64, widths),
+            count,
+            max_length,
+            parsed: 0,
+            index: 0,
+            left: 0,
+            started: false,
+            phase: Phase::Lengths,
         })
     }
 
-    pub const fn is_complete(&self) -> bool { matches!(self.phase, Phase::Done) }
+    pub const fn is_complete(&self) -> bool {
+        matches!(self.phase, Phase::Done)
+    }
     pub fn finish(&self) -> Result<()> {
-        if self.is_complete() { Ok(()) } else { Err(Error::Truncated) }
+        if self.is_complete() {
+            Ok(())
+        } else {
+            Err(Error::Truncated)
+        }
     }
 
     pub fn feed<'input>(
@@ -76,7 +100,9 @@ impl<'a> DeltaLengthByteArrays<'a> {
                     let lengths = &mut *self.lengths;
                     let parsed = &mut self.parsed;
                     let used = self.delta.feed(&input[at..], |value| {
-                        if error.is_some() { return; }
+                        if error.is_some() {
+                            return;
+                        }
                         match valid_length(value, max_length) {
                             Ok(length) => {
                                 lengths[*parsed] = length;
@@ -86,8 +112,12 @@ impl<'a> DeltaLengthByteArrays<'a> {
                         }
                     })?;
                     at += used;
-                    if let Some(e) = error { return Err(e); }
-                    if !self.delta.is_complete() { break; }
+                    if let Some(e) = error {
+                        return Err(e);
+                    }
+                    if !self.delta.is_complete() {
+                        break;
+                    }
                     debug_assert_eq!(self.parsed, self.count);
                     self.phase = Phase::Bodies;
                 }
@@ -107,7 +137,9 @@ impl<'a> DeltaLengthByteArrays<'a> {
                         self.started = false;
                         continue;
                     }
-                    if at == input.len() { break; }
+                    if at == input.len() {
+                        break;
+                    }
                     let n = (self.left as usize).min(input.len() - at);
                     emit(ByteArrayEvent::Chunk(&input[at..at + n]));
                     self.left -= n as u32;
@@ -164,37 +196,60 @@ impl<'a> DeltaByteArrays<'a> {
     ) -> Result<Self> {
         if parts.len() < count {
             return Err(Error::DeltaWorkspaceTooSmall {
-                needed: count, available: parts.len(),
+                needed: count,
+                available: parts.len(),
             });
         }
         Ok(Self {
-            parts, previous, delta: DeltaBinary::new(count as u64, widths),
-            count, max_length, fixed_length: None, parsed: 0, index: 0,
-            previous_length: 0, current_length: 0, write_at: 0,
-            left: 0, started: false, phase: Phase::Prefixes,
+            parts,
+            previous,
+            delta: DeltaBinary::new(count as u64, widths),
+            count,
+            max_length,
+            fixed_length: None,
+            parsed: 0,
+            index: 0,
+            previous_length: 0,
+            current_length: 0,
+            write_at: 0,
+            left: 0,
+            started: false,
+            phase: Phase::Prefixes,
         })
     }
 
     /// For physical FIXED_LEN_BYTE_ARRAY, validate the reconstructed length
     /// for every value (the wire encoding still stores both length streams).
     pub fn with_fixed_length(mut self, length: u32) -> Result<Self> {
-        if length == 0 { return Err(Error::InvalidFixedLength); }
+        if length == 0 {
+            return Err(Error::InvalidFixedLength);
+        }
         if length > self.max_length {
-            return Err(Error::ValueTooLarge { length, limit: self.max_length });
+            return Err(Error::ValueTooLarge {
+                length,
+                limit: self.max_length,
+            });
         }
         let needed = length as usize;
         if needed > self.previous.len() {
             return Err(Error::OutputBufferTooSmall {
-                needed, available: self.previous.len(),
+                needed,
+                available: self.previous.len(),
             });
         }
         self.fixed_length = Some(length);
         Ok(self)
     }
 
-    pub const fn is_complete(&self) -> bool { matches!(self.phase, Phase::Done) }
+    pub const fn is_complete(&self) -> bool {
+        matches!(self.phase, Phase::Done)
+    }
     pub fn finish(&self) -> Result<()> {
-        if self.is_complete() { Ok(()) } else { Err(Error::Truncated) }
+        if self.is_complete() {
+            Ok(())
+        } else {
+            Err(Error::Truncated)
+        }
     }
 
     /// The callback is higher-ranked because `Chunk` may refer to either the
@@ -215,19 +270,28 @@ impl<'a> DeltaByteArrays<'a> {
                     let parts = &mut *self.parts;
                     let parsed = &mut self.parsed;
                     let used = self.delta.feed(&input[at..], |value| {
-                        if error.is_some() { return; }
+                        if error.is_some() {
+                            return;
+                        }
                         match valid_length(value, max_length) {
                             Ok(length) => {
-                                if prefixes { parts[*parsed].prefix = length; }
-                                else { parts[*parsed].suffix = length; }
+                                if prefixes {
+                                    parts[*parsed].prefix = length;
+                                } else {
+                                    parts[*parsed].suffix = length;
+                                }
                                 *parsed += 1;
                             }
                             Err(e) => error = Some(e),
                         }
                     })?;
                     at += used;
-                    if let Some(e) = error { return Err(e); }
-                    if !self.delta.is_complete() { break; }
+                    if let Some(e) = error {
+                        return Err(e);
+                    }
+                    if !self.delta.is_complete() {
+                        break;
+                    }
                     debug_assert_eq!(self.parsed, self.count);
                     if prefixes {
                         self.delta.reset(self.count as u64);
@@ -250,18 +314,26 @@ impl<'a> DeltaByteArrays<'a> {
                                 previous_length: self.previous_length,
                             });
                         }
-                        let length = current.prefix.checked_add(current.suffix)
+                        let length = current
+                            .prefix
+                            .checked_add(current.suffix)
                             .ok_or(Error::InvalidDeltaHeader)?;
                         if length > self.max_length {
-                            return Err(Error::ValueTooLarge { length, limit: self.max_length });
+                            return Err(Error::ValueTooLarge {
+                                length,
+                                limit: self.max_length,
+                            });
                         }
                         if let Some(fixed) = self.fixed_length {
-                            if length != fixed { return Err(Error::LengthMismatch); }
+                            if length != fixed {
+                                return Err(Error::LengthMismatch);
+                            }
                         }
                         let needed = length as usize;
                         if needed > self.previous.len() {
                             return Err(Error::OutputBufferTooSmall {
-                                needed, available: self.previous.len(),
+                                needed,
+                                available: self.previous.len(),
                             });
                         }
                         self.current_length = length;
@@ -270,7 +342,9 @@ impl<'a> DeltaByteArrays<'a> {
                         self.started = true;
                         emit(ByteArrayEvent::Start(length));
                         if current.prefix != 0 {
-                            emit(ByteArrayEvent::Chunk(&self.previous[..current.prefix as usize]));
+                            emit(ByteArrayEvent::Chunk(
+                                &self.previous[..current.prefix as usize],
+                            ));
                         }
                     }
                     if self.left == 0 {
@@ -280,7 +354,9 @@ impl<'a> DeltaByteArrays<'a> {
                         self.started = false;
                         continue;
                     }
-                    if at == input.len() { break; }
+                    if at == input.len() {
+                        break;
+                    }
                     let n = (self.left as usize).min(input.len() - at);
                     self.previous[self.write_at..self.write_at + n]
                         .copy_from_slice(&input[at..at + n]);

@@ -10,10 +10,10 @@
 //! The codec operates on *available byte slices*. Network / R2 streaming
 //! belongs in an outer transport layer; see README.md for the distinction.
 
+pub mod parquet;
 mod protocol;
 mod reader;
 mod writer;
-pub mod parquet;
 
 pub use protocol::{Error, Result, WireType};
 pub use reader::{Field, ListHeader, MapHeader, Reader, StructReader};

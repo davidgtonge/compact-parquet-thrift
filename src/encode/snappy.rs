@@ -11,10 +11,14 @@ pub fn compress(input: &[u8], out: &mut [u8], table: &mut [u32]) -> Result<usize
     let mut cursor = Cursor::new(out);
     let len = u32::try_from(input.len()).map_err(|_| EncodeError::Overflow)?;
     cursor.write_uleb(u64::from(len))?;
-    if input.is_empty() { return Ok(cursor.position()); }
+    if input.is_empty() {
+        return Ok(cursor.position());
+    }
 
     let hashed = table.len() >= 2 && table.len().is_power_of_two();
-    if hashed { table.fill(0); }
+    if hashed {
+        table.fill(0);
+    }
     let mask = table.len().wrapping_sub(1);
 
     let mut i = 0;

@@ -65,7 +65,8 @@ fn writer_matches_python_apache_thrift_reference() {
         w.i16(-2)?;
         w.bool_element(true)?;
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
     assert_eq!(w.into_inner().as_written(), REFERENCE);
 }
 
@@ -81,7 +82,8 @@ fn raw_fields_can_be_reemitted_losslessly() {
             w.raw_field(f.id, f.kind, raw)?;
         }
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
     assert_eq!(w.into_inner().as_written(), REFERENCE);
 }
 
@@ -92,12 +94,15 @@ fn long_list_and_out_of_order_field_ids() {
     w.structure(|w| {
         w.field_header(100, T::List)?;
         w.list_header(T::I16, 16)?;
-        for i in -8..8 { w.i16(i)?; }
+        for i in -8..8 {
+            w.i16(i)?;
+        }
         w.field_i32(-3, i32::MIN)?;
         w.field_i64(2, i64::MIN)?;
         w.field_double(3, 12.5)?;
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
     let written = w.into_inner();
     let mut r = Reader::new(written.as_written());
     let mut s = r.structure().unwrap();
@@ -105,7 +110,9 @@ fn long_list_and_out_of_order_field_ids() {
     assert_eq!((f.id, f.kind), (100, T::List));
     let list = s.list_header().unwrap();
     assert_eq!(list.len, 16);
-    for i in -8..8 { assert_eq!(s.i16().unwrap(), i); }
+    for i in -8..8 {
+        assert_eq!(s.i16().unwrap(), i);
+    }
     assert_eq!(s.next_field().unwrap().unwrap().id, -3);
     assert_eq!(s.i32().unwrap(), i32::MIN);
     assert_eq!(s.next_field().unwrap().unwrap().id, 2);
@@ -138,11 +145,23 @@ fn binary_returns_a_borrow_of_original_input() {
 #[test]
 fn malformed_input_is_rejected() {
     assert_eq!(Reader::new(&[0x80]).var_u64(), Err(Error::EndOfInput));
-    assert_eq!(Reader::new(&[0xff; 10]).var_u64(), Err(Error::InvalidVarint));
-    assert_eq!(Reader::new(&[0x80; 10]).var_u64(), Err(Error::InvalidVarint));
-    assert_eq!(Reader::new(&[0xff, 0xff, 0xff, 0xff, 0x1f]).var_u32(), Err(Error::IntegerOverflow));
+    assert_eq!(
+        Reader::new(&[0xff; 10]).var_u64(),
+        Err(Error::InvalidVarint)
+    );
+    assert_eq!(
+        Reader::new(&[0x80; 10]).var_u64(),
+        Err(Error::InvalidVarint)
+    );
+    assert_eq!(
+        Reader::new(&[0xff, 0xff, 0xff, 0xff, 0x1f]).var_u32(),
+        Err(Error::IntegerOverflow)
+    );
     assert_eq!(Reader::new(&[4, b'a']).binary(), Err(Error::EndOfInput));
-    assert_eq!(Reader::new(&[0x1e]).structure().unwrap().next_field(), Err(Error::InvalidWireType(14)));
+    assert_eq!(
+        Reader::new(&[0x1e]).structure().unwrap().next_field(),
+        Err(Error::InvalidWireType(14))
+    );
     assert_eq!(Reader::new(&[3]).bool_element(), Err(Error::InvalidBool(3)));
     assert_eq!(Reader::new(&[1, 0xff]).string(), Err(Error::InvalidUtf8));
 }
@@ -159,7 +178,10 @@ fn nested_skip_has_bounded_depth() {
 fn output_buffer_is_bounded() {
     let mut tiny = [0u8; 1];
     let mut w = Writer::new(SliceSink::new(&mut tiny));
-    assert_eq!(w.structure(|w| w.field_binary(1, b"large")), Err(Error::OutputFull));
+    assert_eq!(
+        w.structure(|w| w.field_binary(1, b"large")),
+        Err(Error::OutputFull)
+    );
 }
 
 #[test]
@@ -177,7 +199,10 @@ fn parquet_page_header_python_reference() {
     assert_eq!(v2.definition_levels_bytes, Some(100));
     assert_eq!(v2.repetition_levels_bytes, Some(0));
     assert!(v2.is_compressed);
-    assert_eq!(compact_parquet_thrift::parquet::page_header(&PAGE_HEADER[..5]), Err(Error::EndOfInput));
+    assert_eq!(
+        compact_parquet_thrift::parquet::page_header(&PAGE_HEADER[..5]),
+        Err(Error::EndOfInput)
+    );
 }
 
 #[test]
@@ -197,7 +222,8 @@ fn write_parquet_page_header_matches_reference() {
             w.field_i32(6, 0)?;
             w.field_bool(7, true)
         })
-    }).unwrap();
+    })
+    .unwrap();
     assert_eq!(w.into_inner().as_written(), PAGE_HEADER);
 }
 
@@ -212,7 +238,8 @@ fn skip_unknown_bool_collections_consumes_element_bytes() {
         w.bool_element(false)?;
         w.bool_element(true)?;
         w.field_i32(2, 44)
-    }).unwrap();
+    })
+    .unwrap();
     let output = w.into_inner();
     let mut r = Reader::new(output.as_written());
     let mut s = r.structure().unwrap();

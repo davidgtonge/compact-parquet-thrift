@@ -9,15 +9,17 @@
 //! level zero or one), V1 and V2 data pages, and PLAIN dictionary pages.
 //! Nested schemas and unsupported physical encodings fail explicitly.
 
-mod frame;
-mod decode;
-mod inflate;
 mod assemble;
+mod decode;
+mod frame;
+mod inflate;
 
-pub use frame::{PageFramer, FrameEvent};
-pub use decode::{ColumnSpec, Physical, DecodeWorkspace, FlatPage, Location, PageEvent, PageSink, Value};
-pub use inflate::{Inflate, Identity, RawSnappy};
 pub use assemble::PageAssembler;
+pub use decode::{
+    ColumnSpec, DecodeWorkspace, FlatPage, Location, PageEvent, PageSink, Physical, Value,
+};
+pub use frame::{FrameEvent, PageFramer};
+pub use inflate::{Identity, Inflate, RawSnappy};
 
 use crate::parquet::PageHeader;
 
@@ -47,20 +49,27 @@ pub enum Error {
 }
 
 impl From<crate::Error> for Error {
-    fn from(e: crate::Error) -> Self { Self::Thrift(e) }
+    fn from(e: crate::Error) -> Self {
+        Self::Thrift(e)
+    }
 }
 
 impl From<crate::values::Error> for Error {
-    fn from(e: crate::values::Error) -> Self { Self::Value(e) }
+    fn from(e: crate::values::Error) -> Self {
+        Self::Value(e)
+    }
 }
 
 pub(crate) fn nonnegative(value: Option<i32>) -> Result<usize> {
-    usize::try_from(value.ok_or(Error::InvalidHeader)?)
-        .map_err(|_| Error::InvalidHeader)
+    usize::try_from(value.ok_or(Error::InvalidHeader)?).map_err(|_| Error::InvalidHeader)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PageKind { V1, V2, Dictionary }
+pub enum PageKind {
+    V1,
+    V2,
+    Dictionary,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Layout {
@@ -92,11 +101,17 @@ impl Layout {
                 let count = nonnegative(header.data_v1_num_values)?;
                 if spec.max_definition_level == 1 && header.data_v1_definition_encoding != Some(3) {
                     return Err(Error::UnsupportedEncoding {
-                        physical: spec.physical, encoding: header.data_v1_definition_encoding.unwrap_or(-1),
+                        physical: spec.physical,
+                        encoding: header.data_v1_definition_encoding.unwrap_or(-1),
                     });
                 }
-                (count, header.data_v1_encoding.ok_or(Error::InvalidHeader)?, 0,
-                    spec.codec != 0, None)
+                (
+                    count,
+                    header.data_v1_encoding.ok_or(Error::InvalidHeader)?,
+                    0,
+                    spec.codec != 0,
+                    None,
+                )
             }
             PageKind::V2 => {
                 let v2 = header.data_v2.ok_or(Error::InvalidHeader)?;
@@ -120,18 +135,33 @@ impl Layout {
                 if !v2.is_compressed && compressed_bytes != uncompressed_bytes {
                     return Err(Error::InvalidPageSize);
                 }
-                (count, v2.encoding.ok_or(Error::InvalidHeader)?, levels_bytes, compressed, Some(nulls))
+                (
+                    count,
+                    v2.encoding.ok_or(Error::InvalidHeader)?,
+                    levels_bytes,
+                    compressed,
+                    Some(nulls),
+                )
             }
             PageKind::Dictionary => {
                 // The dictionary payload is PLAIN. Older writers still label
                 // the page PLAIN_DICTIONARY (2).
                 match header.dictionary_encoding {
                     Some(0 | 2) => {}
-                    other => return Err(Error::UnsupportedEncoding {
-                        physical: spec.physical, encoding: other.unwrap_or(-1),
-                    }),
+                    other => {
+                        return Err(Error::UnsupportedEncoding {
+                            physical: spec.physical,
+                            encoding: other.unwrap_or(-1),
+                        })
+                    }
                 }
-                (nonnegative(header.dictionary_num_values)?, 0, 0, spec.codec != 0, None)
+                (
+                    nonnegative(header.dictionary_num_values)?,
+                    0,
+                    0,
+                    spec.codec != 0,
+                    None,
+                )
             }
         };
         if count > spec.max_page_values || count > u32::MAX as usize {
@@ -140,8 +170,16 @@ impl Layout {
         if !values_compressed && compressed_bytes != uncompressed_bytes {
             return Err(Error::InvalidPageSize);
         }
-        Ok(Self { kind, count, encoding, compressed_bytes, uncompressed_bytes,
-            v2_levels_bytes: levels_bytes, values_compressed, expected_nulls: nulls })
+        Ok(Self {
+            kind,
+            count,
+            encoding,
+            compressed_bytes,
+            uncompressed_bytes,
+            v2_levels_bytes: levels_bytes,
+            values_compressed,
+            expected_nulls: nulls,
+        })
     }
 }
 

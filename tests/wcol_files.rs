@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use compact_parquet_thrift::pages::{
-    ColumnSpec, DecodeWorkspace, Identity, Location, PageAssembler, PageEvent, PageSink,
-    Physical, RawSnappy, Value,
+    ColumnSpec, DecodeWorkspace, Identity, Location, PageAssembler, PageEvent, PageSink, Physical,
+    RawSnappy, Value,
 };
 use compact_parquet_thrift::parquet::{footer_range, scan_footer, ColumnChunkInfo, PageHeader};
 use compact_parquet_thrift::values::{DeltaByteParts, Int96};
@@ -59,7 +59,11 @@ fn main_files() -> Vec<PathBuf> {
         .collect();
     files.sort();
     if let Ok(filter) = std::env::var("WCOL_PARQUET_FILTER") {
-        files.retain(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.contains(&filter)));
+        files.retain(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.contains(&filter))
+        });
     }
     files
 }
@@ -114,7 +118,8 @@ fn read_file(path: &Path) -> Result<Report, String> {
     file.read_exact(&mut trailer).map_err(|e| e.to_string())?;
     let range = footer_range(size, &trailer).map_err(|e| format!("trailer: {e:?}"))?;
     let mut footer = vec![0u8; (range.end - range.start) as usize];
-    file.seek(SeekFrom::Start(range.start)).map_err(|e| e.to_string())?;
+    file.seek(SeekFrom::Start(range.start))
+        .map_err(|e| e.to_string())?;
     file.read_exact(&mut footer).map_err(|e| e.to_string())?;
 
     let leaves = schema_leaves(&footer)?;
@@ -151,8 +156,11 @@ fn read_file(path: &Path) -> Result<Report, String> {
             Class::Read(physical) => {
                 let agg = decode_column(&mut file, column, leaf, physical)
                     .map_err(|e| format!("{label}: {e}"))?;
-                let expected = column.num_values.ok_or_else(|| format!("{label}: no num_values"))?;
-                let expected = u64::try_from(expected).map_err(|_| format!("{label}: negative num_values"))?;
+                let expected = column
+                    .num_values
+                    .ok_or_else(|| format!("{label}: no num_values"))?;
+                let expected =
+                    u64::try_from(expected).map_err(|_| format!("{label}: negative num_values"))?;
                 if agg.rows != expected {
                     return Err(format!(
                         "{label}: decoded {} logical values, metadata says {expected}",
@@ -294,7 +302,8 @@ fn decode_column(
     };
     let len = column.compressed_size.unwrap() as usize;
     let mut bytes = vec![0u8; len];
-    file.seek(SeekFrom::Start(start as u64)).map_err(|e| e.to_string())?;
+    file.seek(SeekFrom::Start(start as u64))
+        .map_err(|e| e.to_string())?;
     file.read_exact(&mut bytes).map_err(|e| e.to_string())?;
 
     let mut at = 0;
@@ -313,7 +322,9 @@ fn decode_column(
         let compressed = usize::try_from(header.compressed_size.ok_or("missing compressed size")?)
             .map_err(|_| "negative compressed size".to_string())?;
         let body_at = at + header_len;
-        let body_end = body_at.checked_add(compressed).ok_or("page size overflow")?;
+        let body_end = body_at
+            .checked_add(compressed)
+            .ok_or("page size overflow")?;
         if body_end > bytes.len() {
             return Err(format!(
                 "page body {body_at}..{body_end} exceeds column chunk {}",
@@ -321,8 +332,17 @@ fn decode_column(
             ));
         }
         let body = &bytes[body_at..body_end];
-        let page_rows = decode_page(header, body, leaf, physical, column.codec.unwrap(), &dict, &mut metric, &mut nulls)
-            .map_err(|e| format!("page at {at}: {e}"))?;
+        let page_rows = decode_page(
+            header,
+            body,
+            leaf,
+            physical,
+            column.codec.unwrap(),
+            &dict,
+            &mut metric,
+            &mut nulls,
+        )
+        .map_err(|e| format!("page at {at}: {e}"))?;
         if header.page_type == Some(2) {
             // Dictionary page: its values are the dictionary, not logical rows.
             // decode_page recorded them by replacing `dict` through the return.
@@ -336,7 +356,11 @@ fn decode_column(
     if !saw_page && column.num_values.unwrap_or(0) != 0 {
         return Err("column chunk has no pages".into());
     }
-    Ok(Agg { rows, nulls, metric })
+    Ok(Agg {
+        rows,
+        nulls,
+        metric,
+    })
 }
 
 struct PageOut {
@@ -409,7 +433,14 @@ fn decode_page(
     let is_dict = header.page_type == Some(2);
     let mut sink = |event: PageEvent<'_>| {
         absorb(
-            event, is_dict, dict, metric, nulls, &mut rows, &mut dictionary, &mut building,
+            event,
+            is_dict,
+            dict,
+            metric,
+            nulls,
+            &mut rows,
+            &mut dictionary,
+            &mut building,
         );
     };
 
@@ -438,7 +469,8 @@ where
     C: compact_parquet_thrift::pages::Inflate,
     F: for<'a> PageSink<'a>,
 {
-    let mut page = PageAssembler::new(*header, spec, workspace, codec).map_err(|e| format!("{e:?}"))?;
+    let mut page =
+        PageAssembler::new(*header, spec, workspace, codec).map_err(|e| format!("{e:?}"))?;
     let used = page.feed(body, sink).map_err(|e| format!("{e:?}"))?;
     if used != body.len() {
         return Err(format!("page consumed {used} of {} body bytes", body.len()));
@@ -463,7 +495,11 @@ fn absorb(
     dictionary: &mut Vec<Decoded>,
     building: &mut Option<Build>,
 ) {
-    let store = |value: Decoded, is_dict: bool, dictionary: &mut Vec<Decoded>, metric: &mut Metric, rows: &mut u64| {
+    let store = |value: Decoded,
+                 is_dict: bool,
+                 dictionary: &mut Vec<Decoded>,
+                 metric: &mut Metric,
+                 rows: &mut u64| {
         if is_dict {
             dictionary.push(value);
         } else {
@@ -507,7 +543,10 @@ fn absorb(
                     if is_dict {
                         store(
                             Decoded::Bytes(build.bytes.unwrap_or_default()),
-                            true, dictionary, metric, rows,
+                            true,
+                            dictionary,
+                            metric,
+                            rows,
                         );
                     } else if let Metric::Bytes(sum) = metric {
                         *sum += i128::from(build.length);
@@ -526,10 +565,28 @@ fn absorb(
                     *rows += 1;
                 }
                 Value::Boolean(v) => store(Decoded::Bool(v), is_dict, dictionary, metric, rows),
-                Value::I32(v) => store(Decoded::I64(i64::from(v)), is_dict, dictionary, metric, rows),
+                Value::I32(v) => store(
+                    Decoded::I64(i64::from(v)),
+                    is_dict,
+                    dictionary,
+                    metric,
+                    rows,
+                ),
                 Value::I64(v) => store(Decoded::I64(v), is_dict, dictionary, metric, rows),
-                Value::F32(v) => store(Decoded::Bits(u64::from(v.to_bits())), is_dict, dictionary, metric, rows),
-                Value::F64(v) => store(Decoded::Bits(v.to_bits()), is_dict, dictionary, metric, rows),
+                Value::F32(v) => store(
+                    Decoded::Bits(u64::from(v.to_bits())),
+                    is_dict,
+                    dictionary,
+                    metric,
+                    rows,
+                ),
+                Value::F64(v) => store(
+                    Decoded::Bits(v.to_bits()),
+                    is_dict,
+                    dictionary,
+                    metric,
+                    rows,
+                ),
                 Value::Int96(Int96(bytes)) => {
                     let mut bits = 0u64;
                     for (i, b) in bytes.iter().enumerate() {
@@ -559,7 +616,8 @@ fn page_value_count(header: &PageHeader) -> Result<usize, String> {
         Some(3) => header.data_v2.and_then(|v| v.num_values),
         other => return Err(format!("unsupported page type {other:?}")),
     };
-    usize::try_from(count.ok_or("page is missing its value count")?).map_err(|_| "negative page count".into())
+    usize::try_from(count.ok_or("page is missing its value count")?)
+        .map_err(|_| "negative page count".into())
 }
 
 fn schema_leaves(footer: &[u8]) -> Result<Vec<Leaf>, String> {
@@ -568,7 +626,8 @@ fn schema_leaves(footer: &[u8]) -> Result<Vec<Leaf>, String> {
     let mut elements = Vec::new();
     while let Some(field) = root.next_field().map_err(|e| format!("schema: {e:?}"))? {
         if field.id != 2 {
-            root.skip(field.kind).map_err(|e| format!("schema skip: {e:?}"))?;
+            root.skip(field.kind)
+                .map_err(|e| format!("schema skip: {e:?}"))?;
             continue;
         }
         field.expect(WireType::List).map_err(|e| format!("{e:?}"))?;
@@ -587,7 +646,10 @@ fn schema_leaves(footer: &[u8]) -> Result<Vec<Leaf>, String> {
     let mut index = 0;
     walk_schema(&elements, &mut index, 0, 0, true, &mut leaves)?;
     if index != elements.len() {
-        return Err(format!("schema walk consumed {index} of {} elements", elements.len()));
+        return Err(format!(
+            "schema walk consumed {index} of {} elements",
+            elements.len()
+        ));
     }
     Ok(leaves)
 }
@@ -624,9 +686,12 @@ fn read_schema_element(reader: &mut Reader<'_>) -> Result<SchemaElement, String>
                 out.repetition = Some(element.i32().map_err(|e| format!("{e:?}"))?);
             }
             4 => {
-                field.expect(WireType::Binary).map_err(|e| format!("{e:?}"))?;
+                field
+                    .expect(WireType::Binary)
+                    .map_err(|e| format!("{e:?}"))?;
                 let name = element.binary().map_err(|e| format!("{e:?}"))?;
-                out.name = String::from_utf8(name.to_vec()).map_err(|_| "schema name is not utf-8")?;
+                out.name =
+                    String::from_utf8(name.to_vec()).map_err(|_| "schema name is not utf-8")?;
             }
             5 => {
                 field.expect(WireType::I32).map_err(|e| format!("{e:?}"))?;
@@ -705,9 +770,7 @@ fn check_duckdb(path: &Path, columns: &[Compared]) -> Result<(), String> {
                     continue;
                 }
                 let alias = format!("b{i}");
-                selects.push(format!(
-                    "coalesce(sum({expr}), 0)::VARCHAR AS \"{alias}\""
-                ));
+                selects.push(format!("coalesce(sum({expr}), 0)::VARCHAR AS \"{alias}\""));
                 expected.push((alias, sum.to_string()));
             }
             Metric::Sum(_) | Metric::Bits(_) => {}
@@ -720,10 +783,16 @@ fn check_duckdb(path: &Path, columns: &[Compared]) -> Result<(), String> {
             path.display().to_string().replace('\'', "''")
         );
         let out = run_duckdb(&sql)?;
-        let count: u64 = out.trim().parse().map_err(|_| format!("duckdb count: {out}"))?;
+        let count: u64 = out
+            .trim()
+            .parse()
+            .map_err(|_| format!("duckdb count: {out}"))?;
         if let Some(agg) = columns.iter().find_map(|c| c.agg.as_ref()) {
             if agg.rows != count {
-                return Err(format!("row count {count}, first decoded column has {}", agg.rows));
+                return Err(format!(
+                    "row count {count}, first decoded column has {}",
+                    agg.rows
+                ));
             }
         }
         return Ok(());
@@ -741,7 +810,9 @@ fn check_duckdb(path: &Path, columns: &[Compared]) -> Result<(), String> {
         }
     }
     for (alias, want) in expected {
-        let have = got.get(&alias).ok_or_else(|| format!("duckdb omitted {alias}"))?;
+        let have = got
+            .get(&alias)
+            .ok_or_else(|| format!("duckdb omitted {alias}"))?;
         if have != &want {
             return Err(format!("{alias}: duckdb {have}, decoder {want}"));
         }

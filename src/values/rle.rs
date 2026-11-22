@@ -7,7 +7,12 @@
 use super::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Mode { Header, RepeatValue, Repeat, Packed }
+enum Mode {
+    Header,
+    RepeatValue,
+    Repeat,
+    Packed,
+}
 
 #[derive(Debug, Clone, Copy)]
 struct PackedGroup {
@@ -24,10 +29,14 @@ struct Varint {
 }
 
 impl Varint {
-    const fn new() -> Self { Self { value: 0, shift: 0 } }
+    const fn new() -> Self {
+        Self { value: 0, shift: 0 }
+    }
 
     fn byte(&mut self, b: u8) -> Result<Option<u64>> {
-        if self.shift == 63 && b > 1 { return Err(Error::InvalidVarint); }
+        if self.shift == 63 && b > 1 {
+            return Err(Error::InvalidVarint);
+        }
         self.value |= u64::from(b & 0x7f) << self.shift;
         if b & 0x80 == 0 {
             let result = self.value;
@@ -67,12 +76,19 @@ pub struct HybridRle {
 
 impl HybridRle {
     pub const fn new(bit_width: u8, count: u64) -> Result<Self> {
-        if bit_width > 32 { return Err(Error::InvalidBitWidth(bit_width)); }
+        if bit_width > 32 {
+            return Err(Error::InvalidBitWidth(bit_width));
+        }
         Ok(Self {
-            bit_width, remaining: count, max_value: u32::MAX,
-            mode: Mode::Header, varint: Varint::new(),
-            run_remaining: 0, repeat_value: 0,
-            scratch: [0; 32], scratch_len: 0,
+            bit_width,
+            remaining: count,
+            max_value: u32::MAX,
+            mode: Mode::Header,
+            varint: Varint::new(),
+            run_remaining: 0,
+            repeat_value: 0,
+            scratch: [0; 32],
+            scratch_len: 0,
             packed_group: None,
         })
     }
@@ -84,12 +100,18 @@ impl HybridRle {
         self
     }
 
-    pub const fn remaining_values(&self) -> u64 { self.remaining }
+    pub const fn remaining_values(&self) -> u64 {
+        self.remaining
+    }
     pub const fn is_complete(&self) -> bool {
         self.remaining == 0 && matches!(self.mode, Mode::Header)
     }
     pub fn finish(&self) -> Result<()> {
-        if self.is_complete() { Ok(()) } else { Err(Error::Truncated) }
+        if self.is_complete() {
+            Ok(())
+        } else {
+            Err(Error::Truncated)
+        }
     }
 
     /// Returns bytes consumed. If the logical value count has been reached,
@@ -116,22 +138,32 @@ impl HybridRle {
             }
             match self.mode {
                 Mode::Header => {
-                    if self.remaining == 0 || at == input.len() { break; }
+                    if self.remaining == 0 || at == input.len() {
+                        break;
+                    }
                     let b = input[at];
                     at += 1;
-                    let Some(header) = self.varint.byte(b)? else { continue; };
+                    let Some(header) = self.varint.byte(b)? else {
+                        continue;
+                    };
                     let count = header >> 1;
-                    if count == 0 { return Err(Error::InvalidRun); }
+                    if count == 0 {
+                        return Err(Error::InvalidRun);
+                    }
                     // Parquet caps run length at 2^31-1 values.
                     if header & 1 == 0 {
-                        if count > 0x7fff_ffff { return Err(Error::InvalidRun); }
+                        if count > 0x7fff_ffff {
+                            return Err(Error::InvalidRun);
+                        }
                         // A repeated run has one payload. Extra repetitions
                         // past the logical count are not stored again.
                         self.run_remaining = count.min(self.remaining);
                         self.scratch_len = 0;
                         self.mode = Mode::RepeatValue;
                     } else {
-                        if count > 0x7fff_ffff / 8 { return Err(Error::InvalidRun); }
+                        if count > 0x7fff_ffff / 8 {
+                            return Err(Error::InvalidRun);
+                        }
                         // Groups past the logical count are padding and are
                         // consumed below without being emitted.
                         self.run_remaining = count;
@@ -142,13 +174,17 @@ impl HybridRle {
                 Mode::RepeatValue => {
                     let width = usize::from(self.bit_width).div_ceil(8);
                     if width > 0 {
-                        if at == input.len() { break; }
+                        if at == input.len() {
+                            break;
+                        }
                         let n = (width - self.scratch_len).min(input.len() - at);
                         self.scratch[self.scratch_len..self.scratch_len + n]
                             .copy_from_slice(&input[at..at + n]);
                         self.scratch_len += n;
                         at += n;
-                        if self.scratch_len != width { continue; }
+                        if self.scratch_len != width {
+                            continue;
+                        }
                     }
                     let mut bytes = [0u8; 4];
                     bytes[..width].copy_from_slice(&self.scratch[..width]);
@@ -156,17 +192,15 @@ impl HybridRle {
                     self.repeat_value = raw & mask(self.bit_width);
                     if self.repeat_value > self.max_value {
                         return Err(Error::ValueOutOfRange {
-                            value: self.repeat_value, max: self.max_value,
+                            value: self.repeat_value,
+                            max: self.max_value,
                         });
                     }
                     self.mode = Mode::Repeat;
                 }
                 Mode::Repeat => {
                     let cap = max_values - emitted;
-                    let take = self
-                        .run_remaining
-                        .min(self.remaining)
-                        .min(cap as u64);
+                    let take = self.run_remaining.min(self.remaining).min(cap as u64);
                     for _ in 0..take {
                         emit(self.repeat_value);
                         emitted += 1;
@@ -293,7 +327,11 @@ impl HybridRle {
 }
 
 fn mask(bit_width: u8) -> u32 {
-    if bit_width == 32 { u32::MAX } else { (1u32 << bit_width) - 1 }
+    if bit_width == 32 {
+        u32::MAX
+    } else {
+        (1u32 << bit_width) - 1
+    }
 }
 
 fn decode_group(
@@ -319,7 +357,10 @@ fn decode_group(
         }
         let value = ((window >> shift) & mask) as u32;
         if value > max_value {
-            return Err(Error::ValueOutOfRange { value, max: max_value });
+            return Err(Error::ValueOutOfRange {
+                value,
+                max: max_value,
+            });
         }
         emit(value);
     }
@@ -338,15 +379,27 @@ pub struct DictionaryIds {
 
 impl DictionaryIds {
     pub const fn new(expected_values: u64, dictionary_length: u32) -> Result<Self> {
-        if expected_values > 0 && dictionary_length == 0 { return Err(Error::EmptyDictionary); }
-        Ok(Self { expected_values, dictionary_length, indices: None })
+        if expected_values > 0 && dictionary_length == 0 {
+            return Err(Error::EmptyDictionary);
+        }
+        Ok(Self {
+            expected_values,
+            dictionary_length,
+            indices: None,
+        })
     }
     pub fn is_complete(&self) -> bool {
-        if self.expected_values == 0 { return true; }
+        if self.expected_values == 0 {
+            return true;
+        }
         self.indices.as_ref().is_some_and(HybridRle::is_complete)
     }
     pub fn finish(&self) -> Result<()> {
-        if self.is_complete() { Ok(()) } else { Err(Error::Truncated) }
+        if self.is_complete() {
+            Ok(())
+        } else {
+            Err(Error::Truncated)
+        }
     }
     pub fn feed(&mut self, input: &[u8], emit: impl FnMut(u32)) -> Result<usize> {
         self.feed_limited(input, usize::MAX, emit)

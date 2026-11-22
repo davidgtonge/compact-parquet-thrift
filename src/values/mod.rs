@@ -8,17 +8,19 @@
 //! output collections or allocate. They do not decompress pages, parse page
 //! headers or interpret logical types.
 
-mod plain;
-mod rle;
-mod levels;
 mod delta_binary;
 mod delta_bytes;
+mod levels;
+mod plain;
+mod rle;
 
-pub use plain::{ByteArrayEvent, ByteArrays, FixedByteArrays, Int96, PlainBool, PlainValue, PlainValues};
-pub use rle::{DictionaryIds, HybridRle};
-pub use levels::{Levels, RleBool};
 pub use delta_binary::{DeltaBinary, DeltaInt};
-pub use delta_bytes::{DeltaLengthByteArrays, DeltaByteArrays, DeltaByteParts};
+pub use delta_bytes::{DeltaByteArrays, DeltaByteParts, DeltaLengthByteArrays};
+pub use levels::{Levels, RleBool};
+pub use plain::{
+    ByteArrayEvent, ByteArrays, FixedByteArrays, Int96, PlainBool, PlainValue, PlainValues,
+};
+pub use rle::{DictionaryIds, HybridRle};
 
 pub type Result<T> = core::result::Result<T, Error>;
 
