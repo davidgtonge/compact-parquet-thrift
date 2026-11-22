@@ -14,17 +14,30 @@ pub struct Reader<'a> {
     max_depth: u16,
 }
 
+/// One struct field header: its ID and wire type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Field {
+    /// Thrift field ID.
     pub id: i16,
+    /// Wire type of the field's value.
     pub kind: WireType,
 }
 
 impl Field {
+    /// The value of a boolean field, which is carried by its header.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnexpectedWireType`] if the field is not boolean.
     pub fn bool_value(self) -> Result<bool> {
         self.kind.field_bool()
     }
 
+    /// Check that the field has the wire type its ID requires.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnexpectedWireType`] on a mismatch.
     pub fn expect(self, kind: WireType) -> Result<()> {
         if self.kind == kind {
             Ok(())
@@ -34,14 +47,19 @@ impl Field {
     }
 }
 
+/// A list or set header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ListHeader {
+    /// Number of elements.
     pub len: u32,
+    /// Wire type of every element.
     pub element: WireType,
 }
 
+/// A map header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MapHeader {
+    /// Number of key/value pairs.
     pub len: u32,
     /// Empty maps do not encode key/value types.
     pub types: Option<(WireType, WireType)>,
@@ -58,26 +76,31 @@ pub struct StructReader<'r, 'a> {
     ended: bool,
 }
 
-impl<'r, 'a> Deref for StructReader<'r, 'a> {
+impl<'a> Deref for StructReader<'_, 'a> {
     type Target = Reader<'a>;
     fn deref(&self) -> &Self::Target {
         &*self.reader
     }
 }
 
-impl<'r, 'a> DerefMut for StructReader<'r, 'a> {
+impl DerefMut for StructReader<'_, '_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut *self.reader
     }
 }
 
-impl<'r, 'a> Drop for StructReader<'r, 'a> {
+impl Drop for StructReader<'_, '_> {
     fn drop(&mut self) {
         self.reader.depth -= 1;
     }
 }
 
-impl<'r, 'a> StructReader<'r, 'a> {
+impl StructReader<'_, '_> {
+    /// The next field header, or `None` at the struct's STOP byte.
+    ///
+    /// # Errors
+    ///
+    /// Truncated input, an invalid type tag, or a field ID that overflows `i16`.
     pub fn next_field(&mut self) -> Result<Option<Field>> {
         if self.ended {
             return Ok(None);
@@ -88,7 +111,7 @@ impl<'r, 'a> StructReader<'r, 'a> {
             return Ok(None);
         }
         let kind = WireType::try_from(header & 15)?;
-        let delta = (header >> 4) as i16;
+        let delta = i16::from(header >> 4);
         let id = if delta == 0 {
             self.reader.i16()?
         } else {
@@ -102,6 +125,8 @@ impl<'r, 'a> StructReader<'r, 'a> {
 }
 
 impl<'a> Reader<'a> {
+    /// A cursor at the start of `input` with the default nesting limit (64).
+    #[must_use]
     pub const fn new(input: &'a [u8]) -> Self {
         Self {
             input,
@@ -111,6 +136,8 @@ impl<'a> Reader<'a> {
         }
     }
 
+    /// A cursor with a custom nesting limit for structs and collections.
+    #[must_use]
     pub const fn with_max_depth(input: &'a [u8], max_depth: u16) -> Self {
         Self {
             input,
@@ -120,15 +147,24 @@ impl<'a> Reader<'a> {
         }
     }
 
+    /// Bytes consumed from the start of the window.
+    #[must_use]
     pub const fn position(&self) -> usize {
         self.offset
     }
-    pub fn remaining(&self) -> usize {
+
+    /// Bytes left in the window.
+    #[must_use]
+    pub const fn remaining(&self) -> usize {
         self.input.len() - self.offset
     }
 
     /// Independent cursor over the same window. Depth starts at zero so a
     /// nested value can be walked twice without sharing the parent's budget.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::EndOfInput`] if `offset` is past the window.
     pub fn fork_at(&self, offset: usize) -> Result<Reader<'a>> {
         if offset > self.input.len() {
             return Err(Error::EndOfInput);
@@ -143,6 +179,10 @@ impl<'a> Reader<'a> {
 
     /// Move this cursor. Depth is unchanged; do not call while a child
     /// `StructReader` is still live.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::EndOfInput`] if `offset` is past the window.
     pub fn set_position(&mut self, offset: usize) -> Result<()> {
         if offset > self.input.len() {
             return Err(Error::EndOfInput);
@@ -151,6 +191,11 @@ impl<'a> Reader<'a> {
         Ok(())
     }
 
+    /// Borrow the next `len` bytes.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::EndOfInput`] if fewer than `len` bytes remain.
     pub fn take(&mut self, len: usize) -> Result<&'a [u8]> {
         let end = self.offset.checked_add(len).ok_or(Error::IntegerOverflow)?;
         let result = self.input.get(self.offset..end).ok_or(Error::EndOfInput)?;
@@ -158,15 +203,32 @@ impl<'a> Reader<'a> {
         Ok(result)
     }
 
+    /// Read one byte.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::EndOfInput`] at the end of the window.
     pub fn byte(&mut self) -> Result<u8> {
-        Ok(self.take(1)?[0])
+        let byte = *self.input.get(self.offset).ok_or(Error::EndOfInput)?;
+        self.offset += 1;
+        Ok(byte)
     }
 
+    /// Read a signed byte.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::EndOfInput`] at the end of the window.
     pub fn i8(&mut self) -> Result<i8> {
-        Ok(self.byte()? as i8)
+        Ok(i8::from_le_bytes([self.byte()?]))
     }
 
     /// Unsigned varint (ULEB128), with strict overflow checks.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::EndOfInput`] if truncated, [`Error::InvalidVarint`] if longer
+    /// than ten bytes or wider than 64 bits.
     pub fn var_u64(&mut self) -> Result<u64> {
         let mut result = 0_u64;
         for shift in (0..=63).step_by(7) {
@@ -174,7 +236,7 @@ impl<'a> Reader<'a> {
             if shift == 63 && b > 1 {
                 return Err(Error::InvalidVarint);
             }
-            result |= ((b & 0x7f) as u64) << shift;
+            result |= u64::from(b & 0x7f) << shift;
             if b & 0x80 == 0 {
                 return Ok(result);
             }
@@ -182,28 +244,53 @@ impl<'a> Reader<'a> {
         Err(Error::InvalidVarint)
     }
 
+    /// Unsigned varint that must fit in 32 bits.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::var_u64`], plus [`Error::IntegerOverflow`].
     pub fn var_u32(&mut self) -> Result<u32> {
         self.var_u64()?
             .try_into()
             .map_err(|_| Error::IntegerOverflow)
     }
 
+    /// Zigzag varint `i16`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::var_u64`], plus [`Error::IntegerOverflow`].
     pub fn i16(&mut self) -> Result<i16> {
-        unzigzag_u64(self.var_u32()? as u64)
+        unzigzag_u64(u64::from(self.var_u32()?))
             .try_into()
             .map_err(|_| Error::IntegerOverflow)
     }
 
+    /// Zigzag varint `i32`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::var_u64`], plus [`Error::IntegerOverflow`].
     pub fn i32(&mut self) -> Result<i32> {
-        unzigzag_u64(self.var_u32()? as u64)
+        unzigzag_u64(u64::from(self.var_u32()?))
             .try_into()
             .map_err(|_| Error::IntegerOverflow)
     }
 
+    /// Zigzag varint `i64`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::var_u64`].
     pub fn i64(&mut self) -> Result<i64> {
         Ok(unzigzag_u64(self.var_u64()?))
     }
 
+    /// Little-endian double.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::EndOfInput`] if fewer than eight bytes remain.
     pub fn f64(&mut self) -> Result<f64> {
         Ok(f64::from_le_bytes(
             self.take(8)?.try_into().map_err(|_| Error::EndOfInput)?,
@@ -212,6 +299,10 @@ impl<'a> Reader<'a> {
 
     /// The Compact Protocol uses 1 for true, 2 for false in collections.
     /// A zero false representation is also accepted for compatibility.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::EndOfInput`] or [`Error::InvalidBool`].
     pub fn bool_element(&mut self) -> Result<bool> {
         match self.byte()? {
             1 => Ok(true),
@@ -220,35 +311,64 @@ impl<'a> Reader<'a> {
         }
     }
 
+    /// Borrow a length-prefixed binary value.
+    ///
+    /// # Errors
+    ///
+    /// A malformed length or truncated payload.
     pub fn binary(&mut self) -> Result<&'a [u8]> {
-        let len = self.var_u32()? as usize;
+        let len = usize::try_from(self.var_u32()?).map_err(|_| Error::IntegerOverflow)?;
         self.take(len)
     }
 
+    /// Borrow a length-prefixed UTF-8 string.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::binary`], plus [`Error::InvalidUtf8`].
     pub fn string(&mut self) -> Result<&'a str> {
         core::str::from_utf8(self.binary()?).map_err(|_| Error::InvalidUtf8)
     }
 
+    /// Borrow a sixteen-byte UUID.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::EndOfInput`] if fewer than sixteen bytes remain.
     pub fn uuid(&mut self) -> Result<&'a [u8; 16]> {
         self.take(16)?.try_into().map_err(|_| Error::EndOfInput)
     }
 
+    /// Read a list header.
+    ///
+    /// # Errors
+    ///
+    /// Truncated input, a malformed length or an invalid element type.
     pub fn list_header(&mut self) -> Result<ListHeader> {
         let b = self.byte()?;
         let len = if b >> 4 == 15 {
             self.var_u32()?
         } else {
-            (b >> 4) as u32
+            u32::from(b >> 4)
         };
         let element = WireType::try_from(b & 15)?;
         Ok(ListHeader { len, element })
     }
 
     /// Sets have the same wire representation as lists.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::list_header`].
     pub fn set_header(&mut self) -> Result<ListHeader> {
         self.list_header()
     }
 
+    /// Read a map header.
+    ///
+    /// # Errors
+    ///
+    /// Truncated input, a malformed length or an invalid key/value type.
     pub fn map_header(&mut self) -> Result<MapHeader> {
         let len = self.var_u32()?;
         if len == 0 {
@@ -263,6 +383,11 @@ impl<'a> Reader<'a> {
         })
     }
 
+    /// Enter a struct. Read its fields with [`StructReader::next_field`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::DepthLimit`] if nesting is too deep.
     pub fn structure(&mut self) -> Result<StructReader<'_, 'a>> {
         if self.depth >= self.max_depth {
             return Err(Error::DepthLimit);
@@ -276,16 +401,24 @@ impl<'a> Reader<'a> {
     }
 
     /// Consume the wire representation of an unknown value without allocating.
+    ///
+    /// # Errors
+    ///
+    /// Any malformed or truncated content, or [`Error::DepthLimit`].
     pub fn skip(&mut self, kind: WireType) -> Result<()> {
         self.skip_inner(kind, self.max_depth.saturating_sub(self.depth), true)
     }
 
     /// Borrow the complete encoded value (not its field header).
-    /// The result is safe to pass to `Writer::raw_field()`.
+    /// The result is safe to pass to [`crate::Writer::raw_field`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::skip`].
     pub fn raw_value(&mut self, kind: WireType) -> Result<&'a [u8]> {
         let start = self.offset;
         self.skip(kind)?;
-        Ok(&self.input[start..self.offset])
+        self.input.get(start..self.offset).ok_or(Error::EndOfInput)
     }
 
     fn skip_inner(&mut self, kind: WireType, budget: u16, is_field: bool) -> Result<()> {

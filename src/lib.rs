@@ -1,5 +1,16 @@
 #![no_std]
-#![forbid(unsafe_code)]
+#![deny(
+    missing_docs,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unreachable,
+    clippy::todo,
+    clippy::unimplemented,
+    clippy::dbg_macro,
+    clippy::print_stdout,
+    clippy::print_stderr
+)]
 
 //! A small, allocation-free Thrift Compact Protocol codec.
 //!
@@ -13,6 +24,7 @@
 pub mod parquet;
 mod protocol;
 mod reader;
+mod varint;
 mod writer;
 
 pub use protocol::{Error, Result, WireType};

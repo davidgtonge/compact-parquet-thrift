@@ -4,51 +4,31 @@
 //! or groups of eight bit-packed values (odd header). The bit width is fixed
 //! per stream. Group data may be split at any input boundary.
 
-use super::{Error, Result};
+use super::{complete, Error, Result};
+use crate::varint;
+
+/// Parquet caps a run at 2^31 - 1 values.
+const MAX_RUN: u64 = 0x7fff_ffff;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
+    /// Reading a run header varint.
     Header,
+    /// Reading the repeated value of an RLE run into `scratch`.
     RepeatValue,
-    Repeat,
-    Packed,
+    /// Emitting an RLE run's value.
+    Repeat { value: u32 },
+    /// Inside a bit-packed run; `group` is set while a loaded group of eight
+    /// values is partially emitted.
+    Packed { group: Option<PackedGroup> },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PackedGroup {
-    /// Values still to emit from `scratch[..width]` for this bit-packed group.
+    /// Logical values in this group (fewer than eight only at the stream end).
     total: u8,
     /// Next value index within the group (0..total).
     at: u8,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Varint {
-    value: u64,
-    shift: u8,
-}
-
-impl Varint {
-    const fn new() -> Self {
-        Self { value: 0, shift: 0 }
-    }
-
-    fn byte(&mut self, b: u8) -> Result<Option<u64>> {
-        if self.shift == 63 && b > 1 {
-            return Err(Error::InvalidVarint);
-        }
-        self.value |= u64::from(b & 0x7f) << self.shift;
-        if b & 0x80 == 0 {
-            let result = self.value;
-            *self = Self::new();
-            Ok(Some(result))
-        } else if self.shift >= 63 {
-            Err(Error::InvalidVarint)
-        } else {
-            self.shift += 7;
-            Ok(None)
-        }
-    }
 }
 
 /// RLE / bit-packed hybrid decoder; uses a small, fixed-size internal
@@ -65,16 +45,19 @@ pub struct HybridRle {
     remaining: u64,
     max_value: u32,
     mode: Mode,
-    varint: Varint,
+    varint: varint::Decoder,
+    /// Values (RLE) or 8-value groups (bit-packed) left in the current run.
     run_remaining: u64,
-    repeat_value: u32,
     scratch: [u8; 32],
     scratch_len: usize,
-    /// When set, `scratch` holds a full bit-packed group with partial emits in flight.
-    packed_group: Option<PackedGroup>,
 }
 
 impl HybridRle {
+    /// A decoder for `count` values of `bit_width` bits.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidBitWidth`] if `bit_width` exceeds 32.
     pub const fn new(bit_width: u8, count: u64) -> Result<Self> {
         if bit_width > 32 {
             return Err(Error::InvalidBitWidth(bit_width));
@@ -84,256 +67,250 @@ impl HybridRle {
             remaining: count,
             max_value: u32::MAX,
             mode: Mode::Header,
-            varint: Varint::new(),
+            varint: varint::Decoder::new(),
             run_remaining: 0,
-            repeat_value: 0,
             scratch: [0; 32],
             scratch_len: 0,
-            packed_group: None,
         })
     }
 
     /// Validate emitted indices / levels against a known dictionary or
     /// definition-level maximum before passing them to the consumer.
+    #[must_use]
     pub const fn with_max_value(mut self, max_value: u32) -> Self {
         self.max_value = max_value;
         self
     }
 
+    /// Values not yet emitted.
+    #[must_use]
     pub const fn remaining_values(&self) -> u64 {
         self.remaining
     }
+
+    /// Whether every value has been emitted and no run is in progress.
+    #[must_use]
     pub const fn is_complete(&self) -> bool {
         self.remaining == 0 && matches!(self.mode, Mode::Header)
     }
+
+    /// Check that the stream ended after its last value.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Truncated`] if values are missing.
     pub fn finish(&self) -> Result<()> {
-        if self.is_complete() {
-            Ok(())
-        } else {
-            Err(Error::Truncated)
-        }
+        complete(self.is_complete())
     }
 
     /// Returns bytes consumed. If the logical value count has been reached,
     /// trailing bytes are left for the caller to validate against its frame.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidVarint`] or [`Error::InvalidRun`] for a malformed run
+    /// header, [`Error::ValueOutOfRange`] for a value above the maximum.
     pub fn feed(&mut self, input: &[u8], emit: impl FnMut(u32)) -> Result<usize> {
         self.feed_limited(input, usize::MAX, emit)
     }
 
     /// Emit at most `max_values` scalars; stops before consuming indices beyond the last emit.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::feed`].
     pub fn feed_limited(
         &mut self,
         input: &[u8],
         max_values: usize,
         mut emit: impl FnMut(u32),
     ) -> Result<usize> {
-        if max_values == 0 {
-            return Ok(0);
-        }
         let mut at = 0;
         let mut emitted = 0usize;
-        loop {
-            if emitted >= max_values {
-                break;
-            }
-            match self.mode {
-                Mode::Header => {
-                    if self.remaining == 0 || at == input.len() {
-                        break;
-                    }
-                    let b = input[at];
-                    at += 1;
-                    let Some(header) = self.varint.byte(b)? else {
-                        continue;
-                    };
-                    let count = header >> 1;
-                    if count == 0 {
-                        return Err(Error::InvalidRun);
-                    }
-                    // Parquet caps run length at 2^31-1 values.
-                    if header & 1 == 0 {
-                        if count > 0x7fff_ffff {
-                            return Err(Error::InvalidRun);
-                        }
-                        // A repeated run has one payload. Extra repetitions
-                        // past the logical count are not stored again.
-                        self.run_remaining = count.min(self.remaining);
-                        self.scratch_len = 0;
-                        self.mode = Mode::RepeatValue;
-                    } else {
-                        if count > 0x7fff_ffff / 8 {
-                            return Err(Error::InvalidRun);
-                        }
-                        // Groups past the logical count are padding and are
-                        // consumed below without being emitted.
-                        self.run_remaining = count;
-                        self.scratch_len = 0;
-                        self.mode = Mode::Packed;
-                    }
-                }
-                Mode::RepeatValue => {
-                    let width = usize::from(self.bit_width).div_ceil(8);
-                    if width > 0 {
-                        if at == input.len() {
-                            break;
-                        }
-                        let n = (width - self.scratch_len).min(input.len() - at);
-                        self.scratch[self.scratch_len..self.scratch_len + n]
-                            .copy_from_slice(&input[at..at + n]);
-                        self.scratch_len += n;
-                        at += n;
-                        if self.scratch_len != width {
-                            continue;
-                        }
-                    }
-                    let mut bytes = [0u8; 4];
-                    bytes[..width].copy_from_slice(&self.scratch[..width]);
-                    let raw = u32::from_le_bytes(bytes);
-                    self.repeat_value = raw & mask(self.bit_width);
-                    if self.repeat_value > self.max_value {
-                        return Err(Error::ValueOutOfRange {
-                            value: self.repeat_value,
-                            max: self.max_value,
-                        });
-                    }
-                    self.mode = Mode::Repeat;
-                }
-                Mode::Repeat => {
-                    let cap = max_values - emitted;
-                    let take = self.run_remaining.min(self.remaining).min(cap as u64);
-                    for _ in 0..take {
-                        emit(self.repeat_value);
-                        emitted += 1;
-                    }
-                    self.run_remaining -= take;
-                    self.remaining -= take;
-                    if self.run_remaining == 0 {
-                        self.mode = Mode::Header;
-                    }
-                }
-                Mode::Packed => {
-                    if self.run_remaining == 0 {
-                        self.mode = Mode::Header;
-                        self.packed_group = None;
-                        continue;
-                    }
-                    let width = usize::from(self.bit_width);
-                    if self.remaining == 0 {
-                        self.packed_group = None;
-                        if width == 0 {
-                            self.run_remaining = 0;
-                            self.mode = Mode::Header;
-                            continue;
-                        }
-                        if self.scratch_len < width {
-                            if at == input.len() {
-                                break;
-                            }
-                            let n = (width - self.scratch_len).min(input.len() - at);
-                            if n == 0 {
-                                break;
-                            }
-                            self.scratch[self.scratch_len..self.scratch_len + n]
-                                .copy_from_slice(&input[at..at + n]);
-                            self.scratch_len += n;
-                            at += n;
-                            if self.scratch_len < width {
-                                continue;
-                            }
-                        }
-                        self.scratch_len = 0;
-                        self.run_remaining -= 1;
-                        if self.run_remaining == 0 {
-                            self.mode = Mode::Header;
-                        }
-                        continue;
-                    }
-
-                    // Resume or load a full bit-packed group into scratch.
-                    if self.packed_group.is_none() {
-                        if self.scratch_len == 0 && input.len().saturating_sub(at) >= width {
-                            self.scratch[..width].copy_from_slice(&input[at..at + width]);
-                            self.scratch_len = width;
-                            at += width;
-                        } else {
-                            if at == input.len() && width != 0 {
-                                break;
-                            }
-                            let n = (width - self.scratch_len).min(input.len() - at);
-                            if n == 0 {
-                                break;
-                            }
-                            self.scratch[self.scratch_len..self.scratch_len + n]
-                                .copy_from_slice(&input[at..at + n]);
-                            self.scratch_len += n;
-                            at += n;
-                            if self.scratch_len < width {
-                                continue;
-                            }
-                        }
-                        let total = self.remaining.min(8) as u8;
-                        if total == 0 {
-                            break;
-                        }
-                        self.packed_group = Some(PackedGroup { total, at: 0 });
-                    }
-
-                    let group_at = self.packed_group.as_ref().expect("set above").at;
-                    let group_total = self.packed_group.as_ref().expect("set above").total;
-                    let left_in_group = group_total.saturating_sub(group_at);
-                    let cap = max_values.saturating_sub(emitted);
-                    if cap == 0 {
-                        break;
-                    }
-                    // A group holds at most 8 values; saturate rather than truncate a large cap.
-                    let take = left_in_group.min(u8::try_from(cap).unwrap_or(u8::MAX));
-                    if take == 0 {
-                        break;
-                    }
-                    decode_group(
-                        self.bit_width,
-                        self.max_value,
-                        &self.scratch[..width],
-                        group_at,
-                        take,
-                        &mut |v| {
-                            emit(v);
-                            emitted += 1;
-                        },
-                    )?;
-                    let new_at = group_at + take;
-                    self.remaining -= u64::from(take);
-                    if emitted >= max_values && new_at < group_total {
-                        if let Some(g) = &mut self.packed_group {
-                            g.at = new_at;
-                        }
-                        break;
-                    }
-                    if new_at >= group_total {
-                        self.packed_group = None;
-                        self.scratch_len = 0;
-                        self.run_remaining -= 1;
-                        if self.run_remaining == 0 {
-                            self.mode = Mode::Header;
-                        }
-                    } else if let Some(g) = &mut self.packed_group {
-                        g.at = new_at;
-                    }
-                }
+        while emitted < max_values {
+            let budget = max_values - emitted;
+            let step = match self.mode {
+                Mode::Header => self.read_header(input, &mut at)?,
+                Mode::RepeatValue => self.read_repeat_value(input, &mut at)?,
+                Mode::Repeat { value } => Some(self.emit_repeat(value, budget, &mut emit)),
+                Mode::Packed { group } => self.packed(group, input, &mut at, budget, &mut emit)?,
+            };
+            match step {
+                Some(n) => emitted += n,
+                None => break,
             }
         }
         Ok(at)
     }
+
+    /// Steps return `Some(values emitted)` to continue, `None` to wait for input.
+    fn read_header(&mut self, input: &[u8], at: &mut usize) -> Result<Option<usize>> {
+        if self.remaining == 0 {
+            return Ok(None);
+        }
+        let Some(&byte) = input.get(*at) else {
+            return Ok(None);
+        };
+        *at += 1;
+        let Some(header) = self.varint.push(byte)? else {
+            return Ok(Some(0));
+        };
+        let count = header >> 1;
+        self.scratch_len = 0;
+        if header & 1 == 0 {
+            if count == 0 || count > MAX_RUN {
+                return Err(Error::InvalidRun);
+            }
+            // A repeated run has one payload. Extra repetitions
+            // past the logical count are not stored again.
+            self.run_remaining = count.min(self.remaining);
+            self.mode = Mode::RepeatValue;
+        } else {
+            if count == 0 || count > MAX_RUN / 8 {
+                return Err(Error::InvalidRun);
+            }
+            // Groups past the logical count are padding and are
+            // consumed without being emitted.
+            self.run_remaining = count;
+            self.mode = Mode::Packed { group: None };
+        }
+        Ok(Some(0))
+    }
+
+    fn read_repeat_value(&mut self, input: &[u8], at: &mut usize) -> Result<Option<usize>> {
+        let width = usize::from(self.bit_width).div_ceil(8);
+        if !self.fill_scratch(input, at, width) {
+            return Ok(None);
+        }
+        let mut bytes = [0u8; 4];
+        bytes[..width].copy_from_slice(&self.scratch[..width]);
+        let value = u32::from_le_bytes(bytes) & mask(self.bit_width);
+        self.check(value)?;
+        self.mode = Mode::Repeat { value };
+        Ok(Some(0))
+    }
+
+    fn emit_repeat(&mut self, value: u32, budget: usize, emit: &mut impl FnMut(u32)) -> usize {
+        let take = self
+            .run_remaining
+            .min(self.remaining)
+            .min(u64::try_from(budget).unwrap_or(u64::MAX));
+        for _ in 0..take {
+            emit(value);
+        }
+        self.run_remaining -= take;
+        self.remaining -= take;
+        if self.run_remaining == 0 {
+            self.mode = Mode::Header;
+        }
+        // `take` is bounded by `budget`, a usize.
+        usize::try_from(take).unwrap_or(budget)
+    }
+
+    fn packed(
+        &mut self,
+        group: Option<PackedGroup>,
+        input: &[u8],
+        at: &mut usize,
+        budget: usize,
+        emit: &mut impl FnMut(u32),
+    ) -> Result<Option<usize>> {
+        if self.run_remaining == 0 {
+            self.mode = Mode::Header;
+            return Ok(Some(0));
+        }
+        if self.remaining == 0 {
+            return Ok(self.skip_padding_group(input, at).then_some(0));
+        }
+        let width = usize::from(self.bit_width);
+        let group = if let Some(group) = group {
+            group
+        } else {
+            if !self.fill_scratch(input, at, width) {
+                return Ok(None);
+            }
+            PackedGroup {
+                total: u8::try_from(self.remaining.min(8)).unwrap_or(8),
+                at: 0,
+            }
+        };
+        // A group holds at most 8 values; saturate rather than truncate a large budget.
+        let take = (group.total - group.at).min(u8::try_from(budget).unwrap_or(u8::MAX));
+        decode_group(
+            self.bit_width,
+            self.max_value,
+            &self.scratch[..width],
+            group.at,
+            take,
+            emit,
+        )?;
+        self.remaining -= u64::from(take);
+        let next = group.at + take;
+        if next < group.total {
+            self.mode = Mode::Packed {
+                group: Some(PackedGroup { at: next, ..group }),
+            };
+        } else {
+            self.end_group();
+        }
+        Ok(Some(usize::from(take)))
+    }
+
+    /// Consume one padding group after the last logical value. Returns
+    /// whether progress was made.
+    fn skip_padding_group(&mut self, input: &[u8], at: &mut usize) -> bool {
+        if self.bit_width == 0 {
+            self.run_remaining = 0;
+            self.mode = Mode::Header;
+            return true;
+        }
+        if !self.fill_scratch(input, at, usize::from(self.bit_width)) {
+            return false;
+        }
+        self.end_group();
+        true
+    }
+
+    fn end_group(&mut self) {
+        self.scratch_len = 0;
+        self.run_remaining -= 1;
+        self.mode = if self.run_remaining == 0 {
+            Mode::Header
+        } else {
+            Mode::Packed { group: None }
+        };
+    }
+
+    /// Top `scratch` up to `width` bytes from `input`; returns whether it is full.
+    fn fill_scratch(&mut self, input: &[u8], at: &mut usize, width: usize) -> bool {
+        let n = (width - self.scratch_len).min(input.len() - *at);
+        self.scratch[self.scratch_len..self.scratch_len + n].copy_from_slice(&input[*at..*at + n]);
+        self.scratch_len += n;
+        *at += n;
+        self.scratch_len == width
+    }
+
+    const fn check(&self, value: u32) -> Result<()> {
+        if value > self.max_value {
+            return Err(Error::ValueOutOfRange {
+                value,
+                max: self.max_value,
+            });
+        }
+        Ok(())
+    }
 }
 
-fn mask(bit_width: u8) -> u32 {
-    if bit_width == 32 {
+const fn mask(bit_width: u8) -> u32 {
+    if bit_width >= 32 {
         u32::MAX
     } else {
         (1u32 << bit_width) - 1
     }
 }
 
+// `mask` keeps each extracted value within 32 bits.
+#[allow(clippy::cast_possible_truncation)]
 fn decode_group(
     bit_width: u8,
     max_value: u32,
@@ -343,12 +320,12 @@ fn decode_group(
     emit: &mut impl FnMut(u32),
 ) -> Result<()> {
     let mask = u64::from(mask(bit_width));
-    for i in 0..usize::from(count) {
-        let idx = usize::from(start) + i;
+    for idx in usize::from(start)..usize::from(start) + usize::from(count) {
         let bit_offset = idx * usize::from(bit_width);
         let byte_offset = bit_offset / 8;
         let shift = bit_offset % 8;
         // At most 5 bytes cover a 32-bit value starting at any bit offset.
+        // A fixed loop: this runs once per decoded level or dictionary id.
         let mut window = 0u64;
         for j in 0..5 {
             if let Some(&b) = group.get(byte_offset + j) {
@@ -378,6 +355,12 @@ pub struct DictionaryIds {
 }
 
 impl DictionaryIds {
+    /// A decoder for `expected_values` indices into a dictionary of
+    /// `dictionary_length` entries.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::EmptyDictionary`] if values are expected but the dictionary is empty.
     pub const fn new(expected_values: u64, dictionary_length: u32) -> Result<Self> {
         if expected_values > 0 && dictionary_length == 0 {
             return Err(Error::EmptyDictionary);
@@ -388,23 +371,37 @@ impl DictionaryIds {
             indices: None,
         })
     }
+
+    /// Whether every index has been emitted.
+    #[must_use]
     pub fn is_complete(&self) -> bool {
-        if self.expected_values == 0 {
-            return true;
-        }
-        self.indices.as_ref().is_some_and(HybridRle::is_complete)
+        self.expected_values == 0 || self.indices.as_ref().is_some_and(HybridRle::is_complete)
     }
+
+    /// Check that the stream ended after its last index.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Truncated`] if indices are missing.
     pub fn finish(&self) -> Result<()> {
-        if self.is_complete() {
-            Ok(())
-        } else {
-            Err(Error::Truncated)
-        }
+        complete(self.is_complete())
     }
+
+    /// Decode as many indices as `input` holds; returns bytes consumed.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidBitWidth`] for a width byte above 32, or any
+    /// [`HybridRle`] error, including an index outside the dictionary.
     pub fn feed(&mut self, input: &[u8], emit: impl FnMut(u32)) -> Result<usize> {
         self.feed_limited(input, usize::MAX, emit)
     }
 
+    /// Emit at most `max_values` indices.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::feed`].
     pub fn feed_limited(
         &mut self,
         input: &[u8],
@@ -414,23 +411,17 @@ impl DictionaryIds {
         if self.expected_values == 0 || max_values == 0 {
             return Ok(0);
         }
-        let mut at = 0;
-        if self.indices.is_none() {
-            if input.is_empty() {
+        let (at, indices) = if let Some(indices) = self.indices.as_mut() {
+            (0, indices)
+        } else {
+            // The stream starts with the bit width of the indices.
+            let Some(&width) = input.first() else {
                 return Ok(0);
-            }
-            let width = input[0];
-            self.indices = Some(
-                HybridRle::new(width, self.expected_values)?
-                    .with_max_value(self.dictionary_length - 1),
-            );
-            at = 1;
-        }
-        at += self
-            .indices
-            .as_mut()
-            .expect("initialized above")
-            .feed_limited(&input[at..], max_values, emit)?;
-        Ok(at)
+            };
+            let decoder = HybridRle::new(width, self.expected_values)?
+                .with_max_value(self.dictionary_length - 1);
+            (1, self.indices.insert(decoder))
+        };
+        Ok(at + indices.feed_limited(&input[at..], max_values, emit)?)
     }
 }

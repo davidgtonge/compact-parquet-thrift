@@ -140,18 +140,9 @@ impl<'a> Cursor<'a> {
         Ok(())
     }
 
-    pub(crate) fn write_uleb(&mut self, mut value: u64) -> Result<()> {
-        let mut buf = [0u8; 10];
-        let mut len = 0;
-        loop {
-            let byte = (value & 0x7f) as u8;
-            value >>= 7;
-            buf[len] = byte | if value != 0 { 0x80 } else { 0 };
-            len += 1;
-            if value == 0 {
-                break;
-            }
-        }
+    pub(crate) fn write_uleb(&mut self, value: u64) -> Result<()> {
+        let mut buf = [0u8; crate::varint::MAX_LEN];
+        let len = crate::varint::encode(value, &mut buf);
         self.write(&buf[..len])
     }
 }

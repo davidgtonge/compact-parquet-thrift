@@ -9,3 +9,11 @@ description = "Allocation-free Thrift Compact codec and bounded-memory Parquet p
 default = []
 
 [dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }

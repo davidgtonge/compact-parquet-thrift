@@ -1,6 +1,6 @@
 //! Parquet PLAIN encoding. All types use borrowed inputs and fixed-size state.
 
-use super::{Error, Result};
+use super::{chunk_len, complete, Error, Result};
 use core::marker::PhantomData;
 
 mod sealed {
@@ -17,42 +17,31 @@ mod sealed {
 pub struct Int96(pub [u8; 12]);
 
 /// Physical Parquet types with a fixed-width PLAIN encoding.
-/// Sealed so WIDTH is always <= the internal 12-byte carry buffer.
+/// Sealed so `WIDTH` is always <= the internal 12-byte carry buffer.
 pub trait PlainValue: sealed::Sealed + Copy {
+    /// Encoded width in bytes.
     const WIDTH: usize;
-    fn from_le_bytes(bytes: &[u8]) -> Self;
+    /// Decode from the first `WIDTH` bytes; `None` if `bytes` is shorter.
+    fn from_le_prefix(bytes: &[u8]) -> Option<Self>;
 }
 
-impl PlainValue for i32 {
-    const WIDTH: usize = 4;
-    fn from_le_bytes(bytes: &[u8]) -> Self {
-        i32::from_le_bytes(bytes.try_into().expect("i32 width"))
-    }
+macro_rules! plain_number {
+    ($($ty:ty),*) => {$(
+        impl PlainValue for $ty {
+            const WIDTH: usize = core::mem::size_of::<$ty>();
+            fn from_le_prefix(bytes: &[u8]) -> Option<Self> {
+                bytes.first_chunk().copied().map(<$ty>::from_le_bytes)
+            }
+        }
+    )*};
 }
-impl PlainValue for i64 {
-    const WIDTH: usize = 8;
-    fn from_le_bytes(bytes: &[u8]) -> Self {
-        i64::from_le_bytes(bytes.try_into().expect("i64 width"))
-    }
-}
-impl PlainValue for f32 {
-    const WIDTH: usize = 4;
-    fn from_le_bytes(bytes: &[u8]) -> Self {
-        f32::from_le_bytes(bytes.try_into().expect("f32 width"))
-    }
-}
-impl PlainValue for f64 {
-    const WIDTH: usize = 8;
-    fn from_le_bytes(bytes: &[u8]) -> Self {
-        f64::from_le_bytes(bytes.try_into().expect("f64 width"))
-    }
-}
+
+plain_number!(i32, i64, f32, f64);
+
 impl PlainValue for Int96 {
     const WIDTH: usize = 12;
-    fn from_le_bytes(bytes: &[u8]) -> Self {
-        let mut value = [0; 12];
-        value.copy_from_slice(bytes);
-        Self(value)
+    fn from_le_prefix(bytes: &[u8]) -> Option<Self> {
+        bytes.first_chunk().copied().map(Self)
     }
 }
 
@@ -67,6 +56,8 @@ pub struct PlainValues<T: PlainValue> {
 }
 
 impl<T: PlainValue> PlainValues<T> {
+    /// A decoder for `count` values.
+    #[must_use]
     pub const fn new(count: u64) -> Self {
         Self {
             remaining: count,
@@ -76,23 +67,35 @@ impl<T: PlainValue> PlainValues<T> {
         }
     }
 
+    /// Whether every value has been emitted.
+    #[must_use]
     pub const fn is_complete(&self) -> bool {
         self.remaining == 0 && self.filled == 0
     }
 
+    /// Check that the stream ended after its last value.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Truncated`] if values are missing.
     pub fn finish(&self) -> Result<()> {
-        if self.is_complete() {
-            Ok(())
-        } else {
-            Err(Error::Truncated)
-        }
+        complete(self.is_complete())
     }
 
+    /// Decode as many values as `input` holds; returns bytes consumed.
+    ///
+    /// # Errors
+    ///
+    /// None at present; the `Result` matches the other decoders.
     pub fn feed(&mut self, input: &[u8], emit: impl FnMut(T)) -> Result<usize> {
         self.feed_limited(input, usize::MAX, emit)
     }
 
     /// Emit at most `max_values` scalars; stops before consuming bytes beyond the last emitted value.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::feed`].
     pub fn feed_limited(
         &mut self,
         input: &[u8],
@@ -111,13 +114,15 @@ impl<T: PlainValue> PlainValues<T> {
                 self.filled += n;
                 at += n;
                 if self.filled == T::WIDTH {
-                    emit(T::from_le_bytes(&self.carry[..T::WIDTH]));
+                    if let Some(value) = T::from_le_prefix(&self.carry) {
+                        emit(value);
+                    }
                     self.filled = 0;
                     self.remaining -= 1;
                     emitted += 1;
                 }
-            } else if input.len() - at >= T::WIDTH {
-                emit(T::from_le_bytes(&input[at..at + T::WIDTH]));
+            } else if let Some(value) = T::from_le_prefix(&input[at..]) {
+                emit(value);
                 at += T::WIDTH;
                 self.remaining -= 1;
                 emitted += 1;
@@ -144,6 +149,8 @@ pub struct PlainBool {
 }
 
 impl PlainBool {
+    /// A decoder for `count` booleans.
+    #[must_use]
     pub const fn new(count: u64) -> Self {
         Self {
             remaining: count,
@@ -151,20 +158,36 @@ impl PlainBool {
             held: None,
         }
     }
+
+    /// Whether every value has been emitted.
+    #[must_use]
     pub const fn is_complete(&self) -> bool {
         self.remaining == 0
     }
+
+    /// Check that the stream ended after its last value.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Truncated`] if values are missing.
     pub fn finish(&self) -> Result<()> {
-        if self.is_complete() {
-            Ok(())
-        } else {
-            Err(Error::Truncated)
-        }
+        complete(self.is_complete())
     }
+
+    /// Decode as many booleans as `input` holds; returns bytes consumed.
+    ///
+    /// # Errors
+    ///
+    /// None at present; the `Result` matches the other decoders.
     pub fn feed(&mut self, input: &[u8], emit: impl FnMut(bool)) -> Result<usize> {
         self.feed_limited(input, usize::MAX, emit)
     }
 
+    /// Emit at most `max_values` booleans.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::feed`].
     pub fn feed_limited(
         &mut self,
         input: &[u8],
@@ -204,12 +227,15 @@ impl PlainBool {
     }
 }
 
-/// A borrowed event for a single BYTE_ARRAY / FIXED_LEN_BYTE_ARRAY value.
-/// A value may have multiple Chunk events when it crosses input boundaries.
+/// A borrowed event for a single `BYTE_ARRAY` / `FIXED_LEN_BYTE_ARRAY` value.
+/// A value may have multiple `Chunk` events when it crosses input boundaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ByteArrayEvent<'a> {
+    /// A value of this many bytes begins.
     Start(u32),
+    /// The next fragment of the current value.
     Chunk(&'a [u8]),
+    /// The current value is complete.
     End,
 }
 
@@ -219,7 +245,7 @@ enum ByteState {
     Body { left: u32 },
 }
 
-/// PLAIN BYTE_ARRAY: a 4-byte little-endian length before each value.
+/// PLAIN `BYTE_ARRAY`: a 4-byte little-endian length before each value.
 /// The configured `max_value_bytes` guards against untrusted length prefixes.
 #[derive(Debug, Clone, Copy)]
 pub struct ByteArrays {
@@ -229,6 +255,8 @@ pub struct ByteArrays {
 }
 
 impl ByteArrays {
+    /// A decoder for `count` values of at most `max_value_bytes` each.
+    #[must_use]
     pub const fn new(count: u64, max_value_bytes: u32) -> Self {
         Self {
             remaining: count,
@@ -239,17 +267,27 @@ impl ByteArrays {
             },
         }
     }
+    /// Whether every value has been emitted.
+    #[must_use]
     pub const fn is_complete(&self) -> bool {
         self.remaining == 0
     }
+
+    /// Check that the stream ended after its last value.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Truncated`] if values are missing.
     pub fn finish(&self) -> Result<()> {
-        if self.is_complete() {
-            Ok(())
-        } else {
-            Err(Error::Truncated)
-        }
+        complete(self.is_complete())
     }
 
+    /// Decode as much as `input` holds; returns bytes consumed. `Chunk`
+    /// events borrow `input`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ValueTooLarge`] for a length prefix above `max_value_bytes`.
     pub fn feed<'a>(
         &mut self,
         input: &'a [u8],
@@ -291,10 +329,11 @@ impl ByteArrays {
                     if at == input.len() {
                         break;
                     }
-                    let n = (*left as usize).min(input.len() - at);
-                    emit(ByteArrayEvent::Chunk(&input[at..at + n]));
-                    *left -= n as u32;
-                    at += n;
+                    let n = chunk_len(*left, input.len() - at);
+                    let end = at + n as usize;
+                    emit(ByteArrayEvent::Chunk(&input[at..end]));
+                    *left -= n;
+                    at = end;
                 }
             }
         }
@@ -302,7 +341,7 @@ impl ByteArrays {
     }
 }
 
-/// PLAIN FIXED_LEN_BYTE_ARRAY. Byte slices are borrowed, potentially split
+/// PLAIN `FIXED_LEN_BYTE_ARRAY`. Byte slices are borrowed, potentially split
 /// across multiple `Chunk` callbacks for one value.
 #[derive(Debug, Clone, Copy)]
 pub struct FixedByteArrays {
@@ -312,6 +351,11 @@ pub struct FixedByteArrays {
 }
 
 impl FixedByteArrays {
+    /// A decoder for `count` values of exactly `length` bytes.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidFixedLength`] if `length` is zero.
     pub const fn new(count: u64, length: u32) -> Result<Self> {
         if length == 0 {
             return Err(Error::InvalidFixedLength);
@@ -322,16 +366,27 @@ impl FixedByteArrays {
             left: 0,
         })
     }
+    /// Whether every value has been emitted.
+    #[must_use]
     pub const fn is_complete(&self) -> bool {
         self.remaining == 0
     }
+
+    /// Check that the stream ended after its last value.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Truncated`] if values are missing.
     pub fn finish(&self) -> Result<()> {
-        if self.is_complete() {
-            Ok(())
-        } else {
-            Err(Error::Truncated)
-        }
+        complete(self.is_complete())
     }
+
+    /// Decode as much as `input` holds; returns bytes consumed. `Chunk`
+    /// events borrow `input`.
+    ///
+    /// # Errors
+    ///
+    /// None at present; the `Result` matches the other decoders.
     pub fn feed<'a>(
         &mut self,
         input: &'a [u8],
@@ -343,10 +398,11 @@ impl FixedByteArrays {
                 self.left = self.length;
                 emit(ByteArrayEvent::Start(self.length));
             }
-            let n = (self.left as usize).min(input.len() - at);
-            emit(ByteArrayEvent::Chunk(&input[at..at + n]));
-            at += n;
-            self.left -= n as u32;
+            let n = chunk_len(self.left, input.len() - at);
+            let end = at + n as usize;
+            emit(ByteArrayEvent::Chunk(&input[at..end]));
+            at = end;
+            self.left -= n;
             if self.left == 0 {
                 emit(ByteArrayEvent::End);
                 self.remaining -= 1;
