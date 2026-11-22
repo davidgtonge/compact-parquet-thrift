@@ -1,4 +1,4 @@
-//! cargo run --example `stream_values`
+//! Run with `cargo run --example stream_values`.
 //! Simulate arbitrary chunks as if they were read from an R2 object body.
 
 use compact_parquet_thrift::values::{ByteArrayEvent, ByteArrays, DictionaryIds, PlainValues};

@@ -1,4 +1,4 @@
-//! cargo run --example `stream_delta`
+//! Run with `cargo run --example stream_delta`.
 //! Forward-only decode of Parquet `DELTA_BINARY_PACKED` and `DELTA_BYTE_ARRAY`.
 
 use compact_parquet_thrift::values::{

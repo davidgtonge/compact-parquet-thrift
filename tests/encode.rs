@@ -1,5 +1,5 @@
-//! Round-trip the encoder through this crate's decoder, then through `DuckDB`
-//! when the `DUCKDB` environment variable names a `DuckDB` CLI binary.
+//! Round-trip the encoder through this crate's decoder, then through DuckDB
+//! when the `DUCKDB` environment variable names a DuckDB CLI binary.
 
 // Tests build small fixtures with literal casts, compare decoded floats
 // exactly, and spell out long scenarios.
@@ -767,7 +767,7 @@ fn delta_file_roundtrips_through_the_page_reader_and_duckdb() {
     );
 }
 
-/// The `DuckDB` CLI named by `DUCKDB`, if it exists.
+/// The DuckDB CLI named by `DUCKDB`, if it exists.
 fn duckdb() -> Option<std::path::PathBuf> {
     std::env::var_os("DUCKDB")
         .map(std::path::PathBuf::from)

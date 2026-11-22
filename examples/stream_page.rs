@@ -1,4 +1,4 @@
-//! cargo run --example `stream_page`
+//! Run with `cargo run --example stream_page`.
 //! A page header followed by nullable INT32 values, decoded in 2-byte chunks.
 
 use compact_parquet_thrift::pages::{

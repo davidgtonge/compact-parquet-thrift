@@ -1,8 +1,8 @@
 //! Read a directory of local Parquet files and check them against their own
-//! metadata, then against `DuckDB` when a CLI path is given.
+//! metadata, then against DuckDB when a CLI path is given.
 //!
 //! Opt-in: the test does nothing unless `PARQUET_DATA_DIR` names a directory.
-//! Set `DUCKDB` to a `DuckDB` CLI binary to also compare aggregates, and
+//! Set `DUCKDB` to a DuckDB CLI binary to also compare aggregates, and
 //! `WCOL_PARQUET_FILTER` to restrict files by name substring:
 //!
 //! `PARQUET_DATA_DIR=../wcol/data cargo test --test wcol_files -- --nocapture`

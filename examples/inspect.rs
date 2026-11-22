@@ -1,4 +1,4 @@
-//! cargo run --example inspect -- file.parquet
+//! Run with `cargo run --example inspect -- FILE.parquet`.
 //! Only the 8-byte trailer and footer are loaded, not the entire Parquet file.
 
 use compact_parquet_thrift::parquet::{footer_range, scan_footer};
