@@ -111,7 +111,7 @@ pub fn encode_hybrid(bit_width: u8, values: &[u32], out: &mut [u8]) -> Result<us
 /// V1 definition levels for a flat optional column: a 4-byte length followed
 /// by a bit-width-1 hybrid stream. A set bit in `present` means the row has a
 /// value. `present` must cover `rows` bits.
-pub fn encode_definition_levels(rows: usize, present: &[u8], out: &mut [u8]) -> Result<usize> {
+pub(crate) fn encode_definition_levels(rows: usize, present: &[u8], out: &mut [u8]) -> Result<usize> {
     let need = rows.div_ceil(8);
     if present.len() < need {
         return Err(EncodeError::ValueCount);
@@ -135,12 +135,12 @@ pub fn encode_definition_levels(rows: usize, present: &[u8], out: &mut [u8]) -> 
 
 /// Bits needed for the largest index of a dictionary (at most 32).
 #[allow(clippy::cast_possible_truncation)]
-pub const fn index_bit_width(dictionary_len: u32) -> u8 {
+pub(crate) const fn index_bit_width(dictionary_len: u32) -> u8 {
     (u32::BITS - dictionary_len.saturating_sub(1).leading_zeros()) as u8
 }
 
 /// Dictionary-id payload: one bit-width byte, then the hybrid stream.
-pub fn encode_dictionary_ids(dictionary_len: u32, ids: &[u32], out: &mut [u8]) -> Result<usize> {
+pub(crate) fn encode_dictionary_ids(dictionary_len: u32, ids: &[u32], out: &mut [u8]) -> Result<usize> {
     if ids.is_empty() {
         return Ok(0);
     }
