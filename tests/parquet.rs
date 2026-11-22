@@ -1,3 +1,14 @@
+// Tests build small fixtures with literal casts, compare decoded floats
+// exactly, and spell out long scenarios.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::float_cmp,
+    clippy::match_wildcard_for_single_variants,
+    clippy::too_many_lines
+)]
+
 use compact_parquet_thrift::parquet::{footer_range, scan_footer};
 use compact_parquet_thrift::{SliceSink, WireType, Writer};
 
@@ -9,7 +20,7 @@ fn inspect(bytes: &[u8], expected_rows: i64, expected_columns: u64) {
     let mut visited = 0;
     let summary = scan_footer(metadata, |column| {
         assert_eq!(column.row_group, 0);
-        assert_eq!(column.index as u64, visited);
+        assert_eq!(u64::from(column.index), visited);
         assert!(column.compressed_size.unwrap() >= 0);
         assert!(column.data_page_offset.unwrap() >= 4);
         assert!(column.codec.is_some());
@@ -100,7 +111,7 @@ fn assert_scanned_row_group(columns: u32, rows_before_columns: bool) {
     let mut visited = 0u64;
     let summary = scan_footer(&metadata, |column| {
         assert_eq!(column.row_group, 0);
-        assert_eq!(column.index as u64, visited);
+        assert_eq!(u64::from(column.index), visited);
         assert_eq!(column.row_group_rows, Some(10));
         assert_eq!(column.data_page_offset, Some(4));
         visited += 1;

@@ -1,3 +1,14 @@
+// Tests build small fixtures with literal casts, compare decoded floats
+// exactly, and spell out long scenarios.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::float_cmp,
+    clippy::match_wildcard_for_single_variants,
+    clippy::too_many_lines
+)]
+
 use compact_parquet_thrift::values::{
     ByteArrayEvent as E, DeltaBinary, DeltaByteArrays, DeltaByteParts, DeltaLengthByteArrays, Error,
 };
@@ -30,7 +41,7 @@ fn encode_delta(first: i64, deltas: &[i64], bits: u8) -> Vec<u8> {
                 .iter()
                 .map(|&x| {
                     if bits == 32 {
-                        (x as i32).wrapping_sub(min as i32) as u32 as u64
+                        u64::from((x as i32).wrapping_sub(min as i32) as u32)
                     } else {
                         x.wrapping_sub(min) as u64
                     }
@@ -48,7 +59,7 @@ fn encode_delta(first: i64, deltas: &[i64], bits: u8) -> Vec<u8> {
                 // the reader must consume it but not emit those fake values.
                 let v = if j < mini.len() {
                     if bits == 32 {
-                        (mini[j] as i32).wrapping_sub(min as i32) as u32 as u64
+                        u64::from((mini[j] as i32).wrapping_sub(min as i32) as u32)
                     } else {
                         mini[j].wrapping_sub(min) as u64
                     }
@@ -90,9 +101,9 @@ fn i32_stream(values: &[i32]) -> Vec<u8> {
     }
     let deltas: Vec<_> = values
         .windows(2)
-        .map(|pair| pair[1].wrapping_sub(pair[0]) as i64)
+        .map(|pair| i64::from(pair[1].wrapping_sub(pair[0])))
         .collect();
-    encode_delta(values[0] as i64, &deltas, 32)
+    encode_delta(i64::from(values[0]), &deltas, 32)
 }
 
 fn encode_lengths(values: &[&[u8]]) -> Vec<u8> {

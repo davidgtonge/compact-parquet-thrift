@@ -1,3 +1,14 @@
+// Tests build small fixtures with literal casts, compare decoded floats
+// exactly, and spell out long scenarios.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::float_cmp,
+    clippy::match_wildcard_for_single_variants,
+    clippy::too_many_lines
+)]
+
 use compact_parquet_thrift::pages::{
     ColumnSpec, DecodeWorkspace, Error, FrameEvent, Identity, Inflate, Location, PageAssembler,
     PageEvent, PageFramer, Physical, RawSnappy, Value,
@@ -92,7 +103,7 @@ fn header(bytes: &[u8]) -> PageHeader {
 fn crc32(bytes: &[u8]) -> u32 {
     let mut crc = !0u32;
     for &b in bytes {
-        crc ^= b as u32;
+        crc ^= u32::from(b);
         for _ in 0..8 {
             crc = (crc >> 1) ^ (if crc & 1 == 1 { 0xedb8_8320 } else { 0 });
         }
@@ -187,7 +198,7 @@ fn parses_headers_and_payload_boundaries_for_arbitrary_chunks() {
                     .feed(chunk, |event| {
                         match event {
                             FrameEvent::Start(h) => {
-                                seen.push(format!("start:{}", h.data_v1_num_values.unwrap()))
+                                seen.push(format!("start:{}", h.data_v1_num_values.unwrap()));
                             }
                             FrameEvent::Body(b) => {
                                 // Fragments may split at arbitrary boundaries.
@@ -718,8 +729,6 @@ fn genuine_parquet_file_flat_int64_dictionary_and_data_pages() {
         }
         page.finish(&mut emit).unwrap();
         assert_eq!(dictionary_entries, [0, 1, 2]);
-        drop(page);
-        drop(snappy);
 
         let data_bytes = &file[data_offset..];
         let (data_header, data_header_size) = page_header(data_bytes).unwrap();

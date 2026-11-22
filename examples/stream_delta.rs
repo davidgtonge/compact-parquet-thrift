@@ -1,5 +1,5 @@
-//! cargo run --example stream_delta
-//! Forward-only decode of Parquet DELTA_BINARY_PACKED and DELTA_BYTE_ARRAY.
+//! cargo run --example `stream_delta`
+//! Forward-only decode of Parquet `DELTA_BINARY_PACKED` and `DELTA_BYTE_ARRAY`.
 
 use compact_parquet_thrift::values::{
     ByteArrayEvent, DeltaBinary, DeltaByteArrays, DeltaByteParts, Error,
@@ -35,7 +35,7 @@ fn main() -> Result<(), Error> {
     for part in string.chunks(3) {
         strings.feed(part, |event| match event {
             ByteArrayEvent::Start(n) => println!("start: {n}"),
-            ByteArrayEvent::Chunk(bytes) => println!("part: {:?}", bytes),
+            ByteArrayEvent::Chunk(bytes) => println!("part: {bytes:?}"),
             ByteArrayEvent::End => println!("end"),
         })?;
     }

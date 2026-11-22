@@ -1,5 +1,16 @@
-//! Round-trip the encoder through this crate's decoder, then through DuckDB
-//! when the `DUCKDB` environment variable names a DuckDB CLI binary.
+//! Round-trip the encoder through this crate's decoder, then through `DuckDB`
+//! when the `DUCKDB` environment variable names a `DuckDB` CLI binary.
+
+// Tests build small fixtures with literal casts, compare decoded floats
+// exactly, and spell out long scenarios.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::float_cmp,
+    clippy::match_wildcard_for_single_variants,
+    clippy::too_many_lines
+)]
 
 use std::process::Command;
 
@@ -419,7 +430,7 @@ fn decode(
             PageEvent::Value(_, Value::Boolean(v)) => page_values.push(Some(Owned::Bool(v))),
             PageEvent::Value(_, Value::BytesStart(len)) => building = Some((len, Vec::new())),
             PageEvent::Value(_, Value::BytesChunk(chunk)) => {
-                building.as_mut().unwrap().1.extend_from_slice(chunk)
+                building.as_mut().unwrap().1.extend_from_slice(chunk);
             }
             PageEvent::Value(_, Value::BytesEnd) => {
                 let (len, bytes) = building.take().unwrap();
@@ -457,12 +468,10 @@ fn decode(
 
 #[test]
 fn delta_binary_roundtrips_block_edges_and_extremes() {
-    for n in [0, 1, 2, 31, 32, 33, 127, 128, 129, 130, 256, 257] {
-        let values: Vec<i32> = (0..n as i32)
-            .map(|i| i.wrapping_mul(3).wrapping_sub(10))
-            .collect();
+    for n in [0i32, 1, 2, 31, 32, 33, 127, 128, 129, 130, 256, 257] {
+        let values: Vec<i32> = (0..n).map(|i| i.wrapping_mul(3).wrapping_sub(10)).collect();
         roundtrip_i32(&values);
-        let wide: Vec<i64> = (0..n as i64)
+        let wide: Vec<i64> = (0..i64::from(n))
             .map(|i| i.wrapping_mul(1_000_000_003))
             .collect();
         roundtrip_i64(&wide);
@@ -483,7 +492,7 @@ fn roundtrip_i32(values: &[i32]) {
     let mut decoder = DeltaBinary::<i32>::new(values.len() as u64, &mut widths);
     let mut at = 0;
     while at < n {
-        let used = decoder.feed(&buf[at..at + 1], |v| got.push(v)).unwrap();
+        let used = decoder.feed(&buf[at..=at], |v| got.push(v)).unwrap();
         assert_eq!(used, 1);
         at += used;
     }
@@ -501,7 +510,7 @@ fn roundtrip_i64(values: &[i64]) {
     let mut decoder = DeltaBinary::<i64>::new(values.len() as u64, &mut widths);
     let mut at = 0;
     while at < n {
-        let used = decoder.feed(&buf[at..at + 1], |v| got.push(v)).unwrap();
+        let used = decoder.feed(&buf[at..=at], |v| got.push(v)).unwrap();
         assert_eq!(used, 1);
         at += used;
     }
@@ -520,7 +529,7 @@ fn delta_byte_arrays_roundtrip_prefixes_and_empty_values() {
     let owned: Vec<Vec<u8>> = (0..140)
         .map(|i| format!("row-{i:04}-{}", i % 5).into_bytes())
         .collect();
-    let refs: Vec<&[u8]> = owned.iter().map(|v| v.as_slice()).collect();
+    let refs: Vec<&[u8]> = owned.iter().map(Vec::as_slice).collect();
     roundtrip_length(&refs);
     roundtrip_prefixed(&refs);
 }
@@ -557,7 +566,7 @@ fn decode_length(input: &[u8], count: usize) -> Vec<Vec<u8>> {
         let end = (at + 1).min(input.len());
         let used = decoder
             .feed(&input[at..end], |event| {
-                collect_bytes(event, &mut got, &mut building)
+                collect_bytes(event, &mut got, &mut building);
             })
             .unwrap();
         if used == 0 && end == at {
@@ -583,7 +592,7 @@ fn decode_prefixed(input: &[u8], count: usize) -> Vec<Vec<u8>> {
         let end = (at + 1).min(input.len());
         let used = decoder
             .feed(&input[at..end], |event| {
-                collect_bytes(event, &mut got, &mut building)
+                collect_bytes(event, &mut got, &mut building);
             })
             .unwrap();
         if used == 0 && end == at {
@@ -638,7 +647,7 @@ fn delta_file_roundtrips_through_the_page_reader_and_duckdb() {
         .collect();
     let b_sum: i64 = b_values.iter().sum();
     let owned: Vec<String> = (0..rows).map(|i| format!("row-{i:04}-{}", i % 5)).collect();
-    let bytes: Vec<&[u8]> = owned.iter().map(|s| s.as_bytes()).collect();
+    let bytes: Vec<&[u8]> = owned.iter().map(String::as_bytes).collect();
     let byte_sum: i64 = bytes.iter().map(|s| s.len() as i64).sum();
 
     let value_bytes = delta_binary_bound(rows, 8)
@@ -758,7 +767,7 @@ fn delta_file_roundtrips_through_the_page_reader_and_duckdb() {
     );
 }
 
-/// The DuckDB CLI named by `DUCKDB`, if it exists.
+/// The `DuckDB` CLI named by `DUCKDB`, if it exists.
 fn duckdb() -> Option<std::path::PathBuf> {
     std::env::var_os("DUCKDB")
         .map(std::path::PathBuf::from)

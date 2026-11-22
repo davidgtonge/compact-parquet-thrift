@@ -1,3 +1,14 @@
+// Tests build small fixtures with literal casts, compare decoded floats
+// exactly, and spell out long scenarios.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::float_cmp,
+    clippy::match_wildcard_for_single_variants,
+    clippy::too_many_lines
+)]
+
 use compact_parquet_thrift::values::{
     ByteArrayEvent as E, ByteArrays, DictionaryIds, Error, FixedByteArrays, HybridRle, Int96,
     Levels, PlainBool, PlainValues,
@@ -433,9 +444,10 @@ fn rle_boolean_feed_limited_emits_one_value_at_a_time() {
             })
             .unwrap();
         assert!(used <= rest.len());
-        if used == 0 && one.is_none() {
-            panic!("decoder stalled after {got:?}");
-        }
+        assert!(
+            !(used == 0 && one.is_none()),
+            "decoder stalled after {got:?}"
+        );
         rest = &rest[used..];
         if let Some(value) = one {
             if got.is_empty() {

@@ -1,3 +1,14 @@
+// Tests build small fixtures with literal casts, compare decoded floats
+// exactly, and spell out long scenarios.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::float_cmp,
+    clippy::match_wildcard_for_single_variants,
+    clippy::too_many_lines
+)]
+
 use compact_parquet_thrift::{Error, Reader, SliceSink, WireType as T, Writer};
 
 const REFERENCE: &[u8] = include_bytes!("fixtures/compact_reference.bin");

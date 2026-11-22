@@ -1,11 +1,22 @@
 //! Read a directory of local Parquet files and check them against their own
-//! metadata, then against DuckDB when a CLI path is given.
+//! metadata, then against `DuckDB` when a CLI path is given.
 //!
 //! Opt-in: the test does nothing unless `PARQUET_DATA_DIR` names a directory.
-//! Set `DUCKDB` to a DuckDB CLI binary to also compare aggregates, and
+//! Set `DUCKDB` to a `DuckDB` CLI binary to also compare aggregates, and
 //! `WCOL_PARQUET_FILTER` to restrict files by name substring:
 //!
 //! `PARQUET_DATA_DIR=../wcol/data cargo test --test wcol_files -- --nocapture`
+
+// Tests build small fixtures with literal casts, compare decoded floats
+// exactly, and spell out long scenarios.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::float_cmp,
+    clippy::match_wildcard_for_single_variants,
+    clippy::too_many_lines
+)]
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -286,8 +297,7 @@ fn merge_agg(total: &mut Agg, next: &Agg) {
     total.rows += next.rows;
     total.nulls += next.nulls;
     match (&mut total.metric, &next.metric) {
-        (Metric::Sum(a), Metric::Sum(b)) => *a += *b,
-        (Metric::Bytes(a), Metric::Bytes(b)) => *a += *b,
+        (Metric::Sum(a), Metric::Sum(b)) | (Metric::Bytes(a), Metric::Bytes(b)) => *a += *b,
         (Metric::Bits(a), Metric::Bits(b)) => *a ^= *b,
         _ => panic!("mixed metrics while merging row groups"),
     }
@@ -381,6 +391,8 @@ enum Decoded {
     Bytes(Vec<u8>),
 }
 
+// Threads the per-column accumulators through one call.
+#[allow(clippy::too_many_arguments)]
 fn decode_page(
     header: PageHeader,
     body: &[u8],
@@ -490,6 +502,8 @@ struct Build {
     bytes: Option<Vec<u8>>,
 }
 
+// Threads the per-column accumulators through one call.
+#[allow(clippy::too_many_arguments)]
 fn absorb(
     event: PageEvent<'_>,
     is_dict: bool,
@@ -515,7 +529,7 @@ fn absorb(
     match event {
         PageEvent::Null(row) => {
             assert!(!is_dict, "dictionary page emitted a null");
-            assert_eq!(row as u64, *rows, "null row index");
+            assert_eq!(u64::from(row), *rows, "null row index");
             *nulls += 1;
             *rows += 1;
         }
@@ -527,7 +541,7 @@ fn absorb(
                 Value::BytesStart(length) => {
                     assert!(building.is_none(), "nested byte array");
                     if !is_dict {
-                        assert_eq!(row as u64, *rows, "byte row index");
+                        assert_eq!(u64::from(row), *rows, "byte row index");
                     }
                     *building = Some(Build {
                         length,
@@ -562,7 +576,7 @@ fn absorb(
                 }
                 Value::DictionaryId(id) => {
                     assert!(!is_dict, "dictionary page emitted an id");
-                    assert_eq!(row as u64, *rows, "dictionary-id row index");
+                    assert_eq!(u64::from(row), *rows, "dictionary-id row index");
                     let value = dict.get(id as usize).unwrap_or_else(|| {
                         panic!("dictionary id {id} out of range {}", dict.len())
                     });
@@ -760,7 +774,7 @@ fn check_duckdb(path: &Path, columns: &[Compared]) -> Result<(), String> {
             "count(*) FILTER (WHERE {quoted} IS NULL)::VARCHAR AS \"{nulls}\""
         ));
         expected.push((nulls, agg.nulls.to_string()));
-        let kind = types.get(&column.name).map(String::as_str).unwrap_or("");
+        let kind = types.get(&column.name).map_or("", String::as_str);
         match &agg.metric {
             Metric::Sum(sum) if is_integer_type(kind) => {
                 let alias = format!("s{i}");

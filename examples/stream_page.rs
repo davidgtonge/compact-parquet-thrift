@@ -1,4 +1,4 @@
-//! cargo run --example stream_page
+//! cargo run --example `stream_page`
 //! A page header followed by nullable INT32 values, decoded in 2-byte chunks.
 
 use compact_parquet_thrift::pages::{
@@ -18,8 +18,9 @@ fn main() {
     writer
         .structure(|w| {
             w.field_i32(1, 0)?; // DATA_PAGE
-            w.field_i32(2, body.len() as i32)?;
-            w.field_i32(3, body.len() as i32)?;
+            let len = i32::try_from(body.len()).expect("small page");
+            w.field_i32(2, len)?;
+            w.field_i32(3, len)?;
             w.field_struct(5, |w| {
                 w.field_i32(1, 3)?; // num_values (including NULLs)
                 w.field_i32(2, 0)?; // PLAIN
@@ -57,7 +58,7 @@ fn main() {
         PageEvent::Value(Location::Row(row), Value::I32(value)) => {
             println!("row {row}: {value}");
         }
-        _ => unreachable!(),
+        PageEvent::Value(..) => unreachable!(),
     };
     for fragment in body.chunks(2) {
         assert_eq!(page.feed(fragment, &mut emit).unwrap(), fragment.len());

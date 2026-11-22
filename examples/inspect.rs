@@ -17,7 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     file.read_exact(&mut trailer)?;
     let range = footer_range(size, &trailer).expect("invalid Parquet trailer");
 
-    let mut footer = vec![0u8; (range.end - range.start) as usize];
+    let mut footer = vec![0u8; usize::try_from(range.end - range.start)?];
     file.seek(SeekFrom::Start(range.start))?;
     file.read_exact(&mut footer)?;
 
