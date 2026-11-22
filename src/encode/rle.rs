@@ -17,7 +17,9 @@ pub struct HybridRleWriter {
 
 impl HybridRleWriter {
     pub fn new(bit_width: u8) -> Result<Self> {
-        if bit_width > 32 { return Err(EncodeError::ValueOutOfRange); }
+        if bit_width > 32 {
+            return Err(EncodeError::ValueOutOfRange);
+        }
         Ok(Self {
             bit_width,
             literals: [0; 8],
@@ -29,7 +31,9 @@ impl HybridRleWriter {
     }
 
     pub fn push(&mut self, value: u32, out: &mut Cursor<'_>) -> Result<()> {
-        if value > mask(self.bit_width) { return Err(EncodeError::ValueOutOfRange); }
+        if value > mask(self.bit_width) {
+            return Err(EncodeError::ValueOutOfRange);
+        }
         if self.in_repeat {
             if value == self.repeat_value {
                 if self.repeat_count == 0x7fff_ffff {
@@ -60,7 +64,9 @@ impl HybridRleWriter {
     }
 
     pub fn finish(&mut self, out: &mut Cursor<'_>) -> Result<()> {
-        if self.in_repeat { self.flush_repeat(out)?; }
+        if self.in_repeat {
+            self.flush_repeat(out)?;
+        }
         self.flush_literals(out)
     }
 
@@ -72,7 +78,9 @@ impl HybridRleWriter {
     }
 
     fn flush_literals(&mut self, out: &mut Cursor<'_>) -> Result<()> {
-        if self.nlit == 0 { return Ok(()); }
+        if self.nlit == 0 {
+            return Ok(());
+        }
         let mut group = [0u32; 8];
         group[..self.nlit as usize].copy_from_slice(&self.literals[..self.nlit as usize]);
         write_bit_packed(self.bit_width, &group, out)?;
@@ -96,8 +104,12 @@ pub fn encode_hybrid(bit_width: u8, values: &[u32], out: &mut [u8]) -> Result<us
 /// value. `present` must cover `rows` bits.
 pub fn encode_definition_levels(rows: usize, present: &[u8], out: &mut [u8]) -> Result<usize> {
     let need = rows.div_ceil(8);
-    if present.len() < need { return Err(EncodeError::ValueCount); }
-    if out.len() < 4 { return Err(EncodeError::OutputFull); }
+    if present.len() < need {
+        return Err(EncodeError::ValueCount);
+    }
+    if out.len() < 4 {
+        return Err(EncodeError::OutputFull);
+    }
     let n = {
         let mut writer = HybridRleWriter::new(1)?;
         let mut cursor = Cursor::new(&mut out[4..]);
@@ -114,18 +126,33 @@ pub fn encode_definition_levels(rows: usize, present: &[u8], out: &mut [u8]) -> 
 }
 
 pub fn index_bit_width(dictionary_len: u32) -> u8 {
-    if dictionary_len <= 1 { 0 }
-    else { (32 - (dictionary_len - 1).leading_zeros()) as u8 }
+    if dictionary_len <= 1 {
+        0
+    } else {
+        (32 - (dictionary_len - 1).leading_zeros()) as u8
+    }
 }
 
 /// Dictionary-id payload: one bit-width byte, then the hybrid stream.
 pub fn encode_dictionary_ids(dictionary_len: u32, ids: &[u32], out: &mut [u8]) -> Result<usize> {
-    if ids.is_empty() { return Ok(0); }
-    if dictionary_len == 0 { return Err(EncodeError::EmptyDictionary); }
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    if dictionary_len == 0 {
+        return Err(EncodeError::EmptyDictionary);
+    }
     let width = index_bit_width(dictionary_len);
-    let limit = if dictionary_len == 0 { 0 } else { dictionary_len - 1 };
-    if ids.iter().any(|&id| id > limit) { return Err(EncodeError::ValueOutOfRange); }
-    if out.is_empty() { return Err(EncodeError::OutputFull); }
+    let limit = if dictionary_len == 0 {
+        0
+    } else {
+        dictionary_len - 1
+    };
+    if ids.iter().any(|&id| id > limit) {
+        return Err(EncodeError::ValueOutOfRange);
+    }
+    if out.is_empty() {
+        return Err(EncodeError::OutputFull);
+    }
     out[0] = width;
     let n = encode_hybrid(width, ids, &mut out[1..])?;
     Ok(1 + n)
@@ -134,7 +161,9 @@ pub fn encode_dictionary_ids(dictionary_len: u32, ids: &[u32], out: &mut [u8]) -
 fn write_rle(bit_width: u8, count: u32, value: u32, out: &mut Cursor<'_>) -> Result<()> {
     out.write_uleb(u64::from(count) << 1)?;
     let nbytes = usize::from(bit_width.div_ceil(8));
-    if nbytes == 0 { return Ok(()); }
+    if nbytes == 0 {
+        return Ok(());
+    }
     out.write(&value.to_le_bytes()[..nbytes])
 }
 
@@ -142,7 +171,9 @@ fn write_bit_packed(bit_width: u8, values: &[u32; 8], out: &mut Cursor<'_>) -> R
     // One group. Header count is the number of groups, not values.
     out.write_uleb((1u64 << 1) | 1)?;
     let nbytes = usize::from(bit_width);
-    if nbytes == 0 { return Ok(()); }
+    if nbytes == 0 {
+        return Ok(());
+    }
     let mut packed = [0u8; 32];
     for (i, &value) in values.iter().enumerate() {
         let start = i * usize::from(bit_width);
@@ -157,5 +188,9 @@ fn write_bit_packed(bit_width: u8, values: &[u32; 8], out: &mut Cursor<'_>) -> R
 }
 
 fn mask(bit_width: u8) -> u32 {
-    if bit_width >= 32 { u32::MAX } else { (1u32 << bit_width) - 1 }
+    if bit_width >= 32 {
+        u32::MAX
+    } else {
+        (1u32 << bit_width) - 1
+    }
 }

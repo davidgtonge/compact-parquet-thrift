@@ -8,21 +8,28 @@ use super::{Error, Layout, PageKind, Result};
 use crate::parquet::PageHeader;
 use crate::values::{
     ByteArrayEvent, ByteArrays, DeltaBinary, DeltaByteArrays, DeltaByteParts,
-    DeltaLengthByteArrays, DictionaryIds, FixedByteArrays, Int96, Levels,
-    PlainBool, PlainValues, RleBool,
+    DeltaLengthByteArrays, DictionaryIds, FixedByteArrays, Int96, Levels, PlainBool, PlainValues,
+    RleBool,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Physical {
-    Boolean, Int32, Int64, Int96, Float, Double, ByteArray, FixedByteArray(u32),
+    Boolean,
+    Int32,
+    Int64,
+    Int96,
+    Float,
+    Double,
+    ByteArray,
+    FixedByteArray(u32),
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct ColumnSpec {
     pub physical: Physical,
-    pub codec: i32,                  // parquet.thrift CompressionCodec
-    pub max_definition_level: u8,   // 0 = required; 1 = optional
-    pub max_repetition_level: u8,   // must be zero
+    pub codec: i32,               // parquet.thrift CompressionCodec
+    pub max_definition_level: u8, // 0 = required; 1 = optional
+    pub max_repetition_level: u8, // must be zero
     pub dictionary_size: Option<u32>,
     pub max_page_bytes: usize,
     pub max_page_values: usize,
@@ -32,9 +39,14 @@ pub struct ColumnSpec {
 impl ColumnSpec {
     pub const fn flat(physical: Physical, codec: i32) -> Self {
         Self {
-            physical, codec, max_definition_level: 0, max_repetition_level: 0,
-            dictionary_size: None, max_page_bytes: 16 * 1024 * 1024,
-            max_page_values: 1_048_576, max_value_bytes: 1_048_576,
+            physical,
+            codec,
+            max_definition_level: 0,
+            max_repetition_level: 0,
+            dictionary_size: None,
+            max_page_bytes: 16 * 1024 * 1024,
+            max_page_values: 1_048_576,
+            max_value_bytes: 1_048_576,
         }
     }
     pub const fn optional(mut self) -> Self {
@@ -65,13 +77,23 @@ struct ValueScratch<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Location { Row(u32), Dictionary(u32) }
+pub enum Location {
+    Row(u32),
+    Dictionary(u32),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Value<'a> {
-    Boolean(bool), I32(i32), I64(i64), Int96(Int96), F32(f32), F64(f64),
+    Boolean(bool),
+    I32(i32),
+    I64(i64),
+    Int96(Int96),
+    F32(f32),
+    F64(f64),
     DictionaryId(u32),
-    BytesStart(u32), BytesChunk(&'a [u8]), BytesEnd,
+    BytesStart(u32),
+    BytesChunk(&'a [u8]),
+    BytesEnd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -109,17 +131,20 @@ struct RowCursor {
 
 impl RowCursor {
     fn new(count: usize, kind: PageKind, optional: bool) -> Self {
-        Self { count, index: 0, active_binary: None,
-            dictionary: kind == PageKind::Dictionary, optional }
+        Self {
+            count,
+            index: 0,
+            active_binary: None,
+            dictionary: kind == PageKind::Dictionary,
+            optional,
+        }
     }
 
     fn is_present(&self, bits: &[u8], row: usize) -> bool {
         !self.optional || (bits[row >> 3] & (1 << (row & 7))) != 0
     }
 
-    fn next(
-        &mut self, bits: &[u8], emit: &mut impl for<'ev> PageSink<'ev>,
-    ) -> Result<Location> {
+    fn next(&mut self, bits: &[u8], emit: &mut impl for<'ev> PageSink<'ev>) -> Result<Location> {
         while self.index < self.count {
             let index = self.index;
             self.index += 1;
@@ -137,22 +162,30 @@ impl RowCursor {
     }
 
     fn scalar<'v>(
-        &mut self, bits: &[u8], value: Value<'v>,
+        &mut self,
+        bits: &[u8],
+        value: Value<'v>,
         emit: &mut impl for<'ev> PageSink<'ev>,
     ) -> Result<()> {
-        if self.active_binary.is_some() { return Err(Error::InvalidHeader); }
+        if self.active_binary.is_some() {
+            return Err(Error::InvalidHeader);
+        }
         let at = self.next(bits, emit)?;
         emit.on_page(PageEvent::Value(at, value));
         Ok(())
     }
 
     fn bytes<'v>(
-        &mut self, bits: &[u8], event: ByteArrayEvent<'v>,
+        &mut self,
+        bits: &[u8],
+        event: ByteArrayEvent<'v>,
         emit: &mut impl for<'ev> PageSink<'ev>,
     ) -> Result<()> {
         match event {
             ByteArrayEvent::Start(length) => {
-                if self.active_binary.is_some() { return Err(Error::InvalidHeader); }
+                if self.active_binary.is_some() {
+                    return Err(Error::InvalidHeader);
+                }
                 let at = self.next(bits, emit)?;
                 self.active_binary = Some(at);
                 emit.on_page(PageEvent::Value(at, Value::BytesStart(length)));
@@ -170,11 +203,15 @@ impl RowCursor {
     }
 
     fn finish(&mut self, bits: &[u8], emit: &mut impl for<'ev> PageSink<'ev>) -> Result<()> {
-        if self.active_binary.is_some() { return Err(Error::MissingValues); }
+        if self.active_binary.is_some() {
+            return Err(Error::MissingValues);
+        }
         while self.index < self.count {
             let index = self.index;
             self.index += 1;
-            if self.is_present(bits, index) { return Err(Error::MissingValues); }
+            if self.is_present(bits, index) {
+                return Err(Error::MissingValues);
+            }
             emit.on_page(PageEvent::Null(index as u32));
         }
         Ok(())
@@ -182,13 +219,20 @@ impl RowCursor {
 }
 
 enum Values<'a> {
-    Bool(PlainBool), BoolRle(RleBool),
-    I32(PlainValues<i32>), I64(PlainValues<i64>), Int96(PlainValues<Int96>),
-    F32(PlainValues<f32>), F64(PlainValues<f64>),
-    Bytes(ByteArrays), Fixed(FixedByteArrays),
+    Bool(PlainBool),
+    BoolRle(RleBool),
+    I32(PlainValues<i32>),
+    I64(PlainValues<i64>),
+    Int96(PlainValues<Int96>),
+    F32(PlainValues<f32>),
+    F64(PlainValues<f64>),
+    Bytes(ByteArrays),
+    Fixed(FixedByteArrays),
     Dictionary(DictionaryIds),
-    Delta32(DeltaBinary<'a, i32>), Delta64(DeltaBinary<'a, i64>),
-    DeltaLength(DeltaLengthByteArrays<'a>), DeltaBytes(DeltaByteArrays<'a>),
+    Delta32(DeltaBinary<'a, i32>),
+    Delta64(DeltaBinary<'a, i64>),
+    DeltaLength(DeltaLengthByteArrays<'a>),
+    DeltaBytes(DeltaByteArrays<'a>),
 }
 
 impl<'a> Values<'a> {
@@ -203,18 +247,45 @@ impl<'a> Values<'a> {
             (0, Physical::Double) => Self::F64(PlainValues::new(count64)),
             (0, Physical::ByteArray) => Self::Bytes(ByteArrays::new(count64, spec.max_value_bytes)),
             (0, Physical::FixedByteArray(n)) => Self::Fixed(FixedByteArrays::new(count64, n)?),
-            (3, Physical::Boolean) => Self::BoolRle(RleBool::new(count64, spec.max_page_bytes.min(u32::MAX as usize) as u32)?),
-            (2 | 8, _) => Self::Dictionary(DictionaryIds::new(count64,
-                spec.dictionary_size.ok_or(Error::InvalidHeader)?)?),
+            (3, Physical::Boolean) => Self::BoolRle(RleBool::new(
+                count64,
+                spec.max_page_bytes.min(u32::MAX as usize) as u32,
+            )?),
+            (2 | 8, _) => Self::Dictionary(DictionaryIds::new(
+                count64,
+                spec.dictionary_size.ok_or(Error::InvalidHeader)?,
+            )?),
             (5, Physical::Int32) => Self::Delta32(DeltaBinary::new(count64, ws.widths)),
             (5, Physical::Int64) => Self::Delta64(DeltaBinary::new(count64, ws.widths)),
             (6, Physical::ByteArray) => Self::DeltaLength(DeltaLengthByteArrays::new(
-                count, ws.lengths, ws.widths, spec.max_value_bytes)?),
+                count,
+                ws.lengths,
+                ws.widths,
+                spec.max_value_bytes,
+            )?),
             (7, Physical::ByteArray) => Self::DeltaBytes(DeltaByteArrays::new(
-                count, ws.parts, ws.widths, ws.previous, spec.max_value_bytes)?),
-            (7, Physical::FixedByteArray(n)) => Self::DeltaBytes(DeltaByteArrays::new(
-                count, ws.parts, ws.widths, ws.previous, spec.max_value_bytes)?.with_fixed_length(n)?),
-            _ => return Err(Error::UnsupportedEncoding { physical: spec.physical, encoding }),
+                count,
+                ws.parts,
+                ws.widths,
+                ws.previous,
+                spec.max_value_bytes,
+            )?),
+            (7, Physical::FixedByteArray(n)) => Self::DeltaBytes(
+                DeltaByteArrays::new(
+                    count,
+                    ws.parts,
+                    ws.widths,
+                    ws.previous,
+                    spec.max_value_bytes,
+                )?
+                .with_fixed_length(n)?,
+            ),
+            _ => {
+                return Err(Error::UnsupportedEncoding {
+                    physical: spec.physical,
+                    encoding,
+                })
+            }
         })
     }
 
@@ -222,18 +293,27 @@ impl<'a> Values<'a> {
         match self {
             Self::Bool(d) => d.is_complete(),
             Self::BoolRle(d) => d.is_complete(),
-            Self::I32(d) => d.is_complete(), Self::I64(d) => d.is_complete(),
-            Self::Int96(d) => d.is_complete(), Self::F32(d) => d.is_complete(),
-            Self::F64(d) => d.is_complete(), Self::Bytes(d) => d.is_complete(),
-            Self::Fixed(d) => d.is_complete(), Self::Dictionary(d) => d.is_complete(),
-            Self::Delta32(d) => d.is_complete(), Self::Delta64(d) => d.is_complete(),
-            Self::DeltaLength(d) => d.is_complete(), Self::DeltaBytes(d) => d.is_complete(),
+            Self::I32(d) => d.is_complete(),
+            Self::I64(d) => d.is_complete(),
+            Self::Int96(d) => d.is_complete(),
+            Self::F32(d) => d.is_complete(),
+            Self::F64(d) => d.is_complete(),
+            Self::Bytes(d) => d.is_complete(),
+            Self::Fixed(d) => d.is_complete(),
+            Self::Dictionary(d) => d.is_complete(),
+            Self::Delta32(d) => d.is_complete(),
+            Self::Delta64(d) => d.is_complete(),
+            Self::DeltaLength(d) => d.is_complete(),
+            Self::DeltaBytes(d) => d.is_complete(),
         }
     }
 
     fn feed(
-        &mut self, input: &[u8], rows: &mut RowCursor,
-        bits: &[u8], emit: &mut impl for<'ev> PageSink<'ev>,
+        &mut self,
+        input: &[u8],
+        rows: &mut RowCursor,
+        bits: &[u8],
+        emit: &mut impl for<'ev> PageSink<'ev>,
     ) -> Result<usize> {
         // The low-level decoders deliberately have infallible callbacks.
         // Capture a row-alignment error, then surface it after decoding.
@@ -245,7 +325,11 @@ impl<'a> Values<'a> {
                         error = rows.scalar(bits, Value::$variant(v), emit).err();
                     }
                 })?;
-                if let Some(e) = error { Err(e) } else { Ok(used) }
+                if let Some(e) = error {
+                    Err(e)
+                } else {
+                    Ok(used)
+                }
             }};
         }
         macro_rules! binary {
@@ -256,7 +340,11 @@ impl<'a> Values<'a> {
                         error = rows.bytes(bits, event, emit).err();
                     }
                 })?;
-                if let Some(e) = error { Err(e) } else { Ok(used) }
+                if let Some(e) = error {
+                    Err(e)
+                } else {
+                    Ok(used)
+                }
             }};
         }
         match self {
@@ -302,39 +390,80 @@ impl<'a> FlatPage<'a> {
         let optional = spec.max_definition_level == 1 && layout.kind != PageKind::Dictionary;
         let needed = layout.count.div_ceil(8);
         if optional && ws.present.len() < needed {
-            return Err(Error::WorkspaceTooSmall { needed, available: ws.present.len() });
+            return Err(Error::WorkspaceTooSmall {
+                needed,
+                available: ws.present.len(),
+            });
         }
-        if optional { ws.present[..needed].fill(0); }
+        if optional {
+            ws.present[..needed].fill(0);
+        }
         let level = if optional {
             Some(if layout.kind == PageKind::V2 {
                 Levels::v2(1, layout.count as u64, layout.v2_levels_bytes as u32)?
             } else {
-                Levels::v1(1, layout.count as u64,
-                    layout.uncompressed_bytes.min(u32::MAX as usize) as u32)?
+                Levels::v1(
+                    1,
+                    layout.count as u64,
+                    layout.uncompressed_bytes.min(u32::MAX as usize) as u32,
+                )?
             })
-        } else { None };
-        let value_scratch = ValueScratch { widths: ws.widths, lengths: ws.lengths,
-            parts: ws.parts, previous: ws.previous };
-        let (scratch, values) = if optional { (Some(value_scratch), None) } else {
-            (None, Some(Values::new(spec, layout.encoding, layout.count, value_scratch)?))
+        } else {
+            None
         };
-        Ok(Self { layout, spec, present: ws.present, level, level_count: 0,
+        let value_scratch = ValueScratch {
+            widths: ws.widths,
+            lengths: ws.lengths,
+            parts: ws.parts,
+            previous: ws.previous,
+        };
+        let (scratch, values) = if optional {
+            (Some(value_scratch), None)
+        } else {
+            (
+                None,
+                Some(Values::new(
+                    spec,
+                    layout.encoding,
+                    layout.count,
+                    value_scratch,
+                )?),
+            )
+        };
+        Ok(Self {
+            layout,
+            spec,
+            present: ws.present,
+            level,
+            level_count: 0,
             physical_count: if optional { 0 } else { layout.count },
-            scratch, values, rows: RowCursor::new(layout.count, layout.kind, optional) })
+            scratch,
+            values,
+            rows: RowCursor::new(layout.count, layout.kind, optional),
+        })
     }
 
-    pub fn compressed_size(&self) -> usize { self.layout.compressed_bytes }
-    pub fn uncompressed_size(&self) -> usize { self.layout.uncompressed_bytes }
-    pub fn v2_levels_size(&self) -> usize { self.layout.v2_levels_bytes }
-    pub fn values_compressed(&self) -> bool { self.layout.values_compressed }
+    pub fn compressed_size(&self) -> usize {
+        self.layout.compressed_bytes
+    }
+    pub fn uncompressed_size(&self) -> usize {
+        self.layout.uncompressed_bytes
+    }
+    pub fn v2_levels_size(&self) -> usize {
+        self.layout.v2_levels_bytes
+    }
+    pub fn values_compressed(&self) -> bool {
+        self.layout.values_compressed
+    }
     pub fn page_kind(&self) -> &'static str {
-        match self.layout.kind { PageKind::V1 => "DATA_PAGE",
-            PageKind::V2 => "DATA_PAGE_V2", PageKind::Dictionary => "DICTIONARY_PAGE" }
+        match self.layout.kind {
+            PageKind::V1 => "DATA_PAGE",
+            PageKind::V2 => "DATA_PAGE_V2",
+            PageKind::Dictionary => "DICTIONARY_PAGE",
+        }
     }
 
-    pub fn feed(
-        &mut self, input: &[u8], emit: &mut impl for<'ev> PageSink<'ev>,
-    ) -> Result<usize> {
+    pub fn feed(&mut self, input: &[u8], emit: &mut impl for<'ev> PageSink<'ev>) -> Result<usize> {
         let mut at = 0;
         if let Some(level) = &mut self.level {
             let count = self.layout.count;
@@ -359,9 +488,15 @@ impl<'a> FlatPage<'a> {
                 }
                 at += used;
             }
-            if let Some(e) = err { return Err(e); }
-            if !level.is_complete() { return Ok(at); }
-            if self.level_count != count { return Err(Error::LengthMismatch); }
+            if let Some(e) = err {
+                return Err(e);
+            }
+            if !level.is_complete() {
+                return Ok(at);
+            }
+            if self.level_count != count {
+                return Err(Error::LengthMismatch);
+            }
             if let Some(expected_nulls) = self.layout.expected_nulls {
                 if count - self.physical_count != expected_nulls {
                     return Err(Error::InvalidNullCount);
@@ -369,7 +504,12 @@ impl<'a> FlatPage<'a> {
             }
             self.level = None;
             let scratch = self.scratch.take().ok_or(Error::InvalidHeader)?;
-            self.values = Some(Values::new(self.spec, self.layout.encoding, self.physical_count, scratch)?);
+            self.values = Some(Values::new(
+                self.spec,
+                self.layout.encoding,
+                self.physical_count,
+                scratch,
+            )?);
         }
         while at < input.len() {
             let values = self.values.as_mut().ok_or(Error::InvalidHeader)?;
@@ -394,7 +534,9 @@ impl<'a> FlatPage<'a> {
     pub fn finish(&mut self, emit: &mut impl for<'ev> PageSink<'ev>) -> Result<()> {
         // Some string decoders emit their final End event without consuming a
         // byte. Flush that event before checking completion.
-        if self.level.is_some() { return Err(Error::Truncated); }
+        if self.level.is_some() {
+            return Err(Error::Truncated);
+        }
         self.feed(&[], emit)?;
         if !self.values.as_ref().is_some_and(Values::is_complete) {
             return Err(Error::Truncated);

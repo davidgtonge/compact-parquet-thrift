@@ -8,7 +8,11 @@ use super::{Error, HybridRle, Result};
 
 #[derive(Debug, Clone, Copy)]
 enum Framing {
-    V1 { prefix: [u8; 4], filled: usize, limit: u32 },
+    V1 {
+        prefix: [u8; 4],
+        filled: usize,
+        limit: u32,
+    },
     V2,
 }
 
@@ -24,26 +28,36 @@ pub struct Levels {
 
 impl Levels {
     pub fn v1(max_level: u32, value_count: u64, max_encoded_bytes: u32) -> Result<Self> {
-        let decoder = HybridRle::new(bit_width(max_level), value_count)?
-            .with_max_value(max_level);
+        let decoder = HybridRle::new(bit_width(max_level), value_count)?.with_max_value(max_level);
         Ok(Self {
-            frame: Framing::V1 { prefix: [0; 4], filled: 0, limit: max_encoded_bytes },
+            frame: Framing::V1 {
+                prefix: [0; 4],
+                filled: 0,
+                limit: max_encoded_bytes,
+            },
             bytes_left: None,
             decoder,
         })
     }
 
     pub fn v2(max_level: u32, value_count: u64, encoded_bytes: u32) -> Result<Self> {
-        let decoder = HybridRle::new(bit_width(max_level), value_count)?
-            .with_max_value(max_level);
-        Ok(Self { frame: Framing::V2, bytes_left: Some(encoded_bytes), decoder })
+        let decoder = HybridRle::new(bit_width(max_level), value_count)?.with_max_value(max_level);
+        Ok(Self {
+            frame: Framing::V2,
+            bytes_left: Some(encoded_bytes),
+            decoder,
+        })
     }
 
     pub fn is_complete(&self) -> bool {
         self.bytes_left == Some(0) && self.decoder.is_complete()
     }
     pub fn finish(&self) -> Result<()> {
-        if self.is_complete() { Ok(()) } else { Err(Error::Truncated) }
+        if self.is_complete() {
+            Ok(())
+        } else {
+            Err(Error::Truncated)
+        }
     }
 
     /// Parse at most the encoded levels stream; leave following page values
@@ -63,21 +77,35 @@ impl Levels {
             return Ok(0);
         }
         let mut at = 0;
-        if let Framing::V1 { prefix, filled, limit } = &mut self.frame {
+        if let Framing::V1 {
+            prefix,
+            filled,
+            limit,
+        } = &mut self.frame
+        {
             if self.bytes_left.is_none() {
                 let n = (4 - *filled).min(input.len());
                 prefix[*filled..*filled + n].copy_from_slice(&input[..n]);
                 *filled += n;
                 at += n;
-                if *filled < 4 { return Ok(at); }
+                if *filled < 4 {
+                    return Ok(at);
+                }
                 let length = u32::from_le_bytes(*prefix);
-                if length > *limit { return Err(Error::FrameTooLarge { length, limit: *limit }); }
+                if length > *limit {
+                    return Err(Error::FrameTooLarge {
+                        length,
+                        limit: *limit,
+                    });
+                }
                 self.bytes_left = Some(length);
             }
         }
         let left = self.bytes_left.expect("V2 or parsed V1 prefix");
         let take = (left as usize).min(input.len() - at);
-        let used = self.decoder.feed_limited(&input[at..at + take], max_values, emit)?;
+        let used = self
+            .decoder
+            .feed_limited(&input[at..at + take], max_values, emit)?;
         // HybridRle stops once all logical levels are emitted, but the framed
         // buffer may still contain writer padding. Snappy (and other codecs)
         // can deliver that buffer in multiple decompressed fragments, so a
@@ -105,8 +133,12 @@ impl RleBool {
     pub fn new(value_count: u64, max_encoded_bytes: u32) -> Result<Self> {
         Ok(Self(Levels::v1(1, value_count, max_encoded_bytes)?))
     }
-    pub fn is_complete(&self) -> bool { self.0.is_complete() }
-    pub fn finish(&self) -> Result<()> { self.0.finish() }
+    pub fn is_complete(&self) -> bool {
+        self.0.is_complete()
+    }
+    pub fn finish(&self) -> Result<()> {
+        self.0.finish()
+    }
     pub fn feed(&mut self, input: &[u8], emit: impl FnMut(bool)) -> Result<usize> {
         self.feed_limited(input, usize::MAX, emit)
     }
@@ -118,6 +150,7 @@ impl RleBool {
         max_values: usize,
         mut emit: impl FnMut(bool),
     ) -> Result<usize> {
-        self.0.feed_limited(input, max_values, |level| emit(level != 0))
+        self.0
+            .feed_limited(input, max_values, |level| emit(level != 0))
     }
 }

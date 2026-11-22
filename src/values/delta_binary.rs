@@ -8,8 +8,8 @@
 //! final mini-block, before reporting completion. Bytes belonging to the
 //! next stream are left untouched.
 
-use core::marker::PhantomData;
 use super::{Error, Result};
+use core::marker::PhantomData;
 
 mod sealed {
     pub trait Sealed {}
@@ -47,13 +47,27 @@ impl DeltaInt for i64 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Phase { BlockSize, MiniCount, Count, First, Minimum, Widths, Packed, Done }
+enum Phase {
+    BlockSize,
+    MiniCount,
+    Count,
+    First,
+    Minimum,
+    Widths,
+    Packed,
+    Done,
+}
 
 #[derive(Debug, Clone, Copy)]
-struct Varint { value: u64, shift: u8 }
+struct Varint {
+    value: u64,
+    shift: u8,
+}
 
 impl Varint {
-    const fn new() -> Self { Self { value: 0, shift: 0 } }
+    const fn new() -> Self {
+        Self { value: 0, shift: 0 }
+    }
 
     fn push(&mut self, b: u8) -> Result<Option<u64>> {
         if self.shift == 63 && (b & 0x7f) > 1 {
@@ -102,11 +116,22 @@ pub struct DeltaBinary<'a, T: DeltaInt> {
 impl<'a, T: DeltaInt> DeltaBinary<'a, T> {
     pub const fn new(expected: u64, widths: &'a mut [u8]) -> Self {
         Self {
-            widths, expected, produced: 0, phase: Phase::BlockSize,
-            varint: Varint::new(), block_size: 0, mini_count: 0,
-            mini_size: 0, widths_read: 0, mini_index: 0,
-            mini_position: 0, packed: 0, packed_bits: 0,
-            minimum: None, previous: None, marker: PhantomData,
+            widths,
+            expected,
+            produced: 0,
+            phase: Phase::BlockSize,
+            varint: Varint::new(),
+            block_size: 0,
+            mini_count: 0,
+            mini_size: 0,
+            widths_read: 0,
+            mini_index: 0,
+            mini_position: 0,
+            packed: 0,
+            packed_bits: 0,
+            minimum: None,
+            previous: None,
+            marker: PhantomData,
         }
     }
 
@@ -129,10 +154,18 @@ impl<'a, T: DeltaInt> DeltaBinary<'a, T> {
         self.previous = None;
     }
 
-    pub const fn is_complete(&self) -> bool { matches!(self.phase, Phase::Done) }
-    pub const fn emitted(&self) -> u64 { self.produced }
+    pub const fn is_complete(&self) -> bool {
+        matches!(self.phase, Phase::Done)
+    }
+    pub const fn emitted(&self) -> u64 {
+        self.produced
+    }
     pub fn finish(&self) -> Result<()> {
-        if self.is_complete() { Ok(()) } else { Err(Error::Truncated) }
+        if self.is_complete() {
+            Ok(())
+        } else {
+            Err(Error::Truncated)
+        }
     }
 
     /// Returns the exact number of bytes belonging to this encoding.
@@ -141,14 +174,23 @@ impl<'a, T: DeltaInt> DeltaBinary<'a, T> {
         let mut at = 0;
         loop {
             match self.phase {
-                Phase::BlockSize | Phase::MiniCount | Phase::Count | Phase::First | Phase::Minimum => {
-                    if at == input.len() { break; }
+                Phase::BlockSize
+                | Phase::MiniCount
+                | Phase::Count
+                | Phase::First
+                | Phase::Minimum => {
+                    if at == input.len() {
+                        break;
+                    }
                     let b = input[at];
                     at += 1;
-                    let Some(value) = self.varint.push(b)? else { continue; };
+                    let Some(value) = self.varint.push(b)? else {
+                        continue;
+                    };
                     match self.phase {
                         Phase::BlockSize => {
-                            let n = usize::try_from(value).map_err(|_| Error::InvalidDeltaHeader)?;
+                            let n =
+                                usize::try_from(value).map_err(|_| Error::InvalidDeltaHeader)?;
                             if n < 128 || n % 128 != 0 || n > u32::MAX as usize {
                                 return Err(Error::InvalidDeltaHeader);
                             }
@@ -156,14 +198,16 @@ impl<'a, T: DeltaInt> DeltaBinary<'a, T> {
                             self.phase = Phase::MiniCount;
                         }
                         Phase::MiniCount => {
-                            let n = usize::try_from(value).map_err(|_| Error::InvalidDeltaHeader)?;
-                            if n == 0 || self.block_size % n != 0 ||
-                                (self.block_size / n) % 32 != 0 {
+                            let n =
+                                usize::try_from(value).map_err(|_| Error::InvalidDeltaHeader)?;
+                            if n == 0 || self.block_size % n != 0 || (self.block_size / n) % 32 != 0
+                            {
                                 return Err(Error::InvalidDeltaHeader);
                             }
                             if n > self.widths.len() {
                                 return Err(Error::DeltaWorkspaceTooSmall {
-                                    needed: n, available: self.widths.len(),
+                                    needed: n,
+                                    available: self.widths.len(),
                                 });
                             }
                             self.mini_count = n;
@@ -171,7 +215,9 @@ impl<'a, T: DeltaInt> DeltaBinary<'a, T> {
                             self.phase = Phase::Count;
                         }
                         Phase::Count => {
-                            if value != self.expected { return Err(Error::LengthMismatch); }
+                            if value != self.expected {
+                                return Err(Error::LengthMismatch);
+                            }
                             self.phase = Phase::First;
                         }
                         Phase::First => {
@@ -203,7 +249,9 @@ impl<'a, T: DeltaInt> DeltaBinary<'a, T> {
                         .copy_from_slice(&input[at..at + n]);
                     self.widths_read += n;
                     at += n;
-                    if self.widths_read < self.mini_count { break; }
+                    if self.widths_read < self.mini_count {
+                        break;
+                    }
                     self.mini_index = 0;
                     self.mini_position = 0;
                     self.packed = 0;
@@ -225,11 +273,15 @@ impl<'a, T: DeltaInt> DeltaBinary<'a, T> {
                         continue;
                     }
                     let width = self.widths[self.mini_index];
-                    if width > T::BITS { return Err(Error::InvalidBitWidth(width)); }
+                    if width > T::BITS {
+                        return Err(Error::InvalidBitWidth(width));
+                    }
                     if width == 0 {
                         let n = (self.expected - self.produced).min(self.mini_size as u64);
                         for _ in 0..n {
-                            let next = self.previous.expect("first value parsed")
+                            let next = self
+                                .previous
+                                .expect("first value parsed")
                                 .advance(self.minimum.expect("block minimum parsed"), 0);
                             self.previous = Some(next);
                             self.produced += 1;
@@ -240,7 +292,9 @@ impl<'a, T: DeltaInt> DeltaBinary<'a, T> {
                     } else {
                         while self.mini_position < self.mini_size {
                             while self.packed_bits < width {
-                                if at == input.len() { return Ok(at); }
+                                if at == input.len() {
+                                    return Ok(at);
+                                }
                                 self.packed |= u128::from(input[at]) << self.packed_bits;
                                 self.packed_bits += 8;
                                 at += 1;
@@ -250,8 +304,10 @@ impl<'a, T: DeltaInt> DeltaBinary<'a, T> {
                             self.packed_bits -= width;
                             self.mini_position += 1;
                             if self.produced < self.expected {
-                                let next = self.previous.expect("first value parsed")
-                                    .advance(self.minimum.expect("block minimum parsed"), value as u64);
+                                let next = self.previous.expect("first value parsed").advance(
+                                    self.minimum.expect("block minimum parsed"),
+                                    value as u64,
+                                );
                                 self.previous = Some(next);
                                 self.produced += 1;
                                 emit(next);
@@ -263,8 +319,11 @@ impl<'a, T: DeltaInt> DeltaBinary<'a, T> {
                     debug_assert_eq!(self.packed_bits, 0);
                     self.mini_position = 0;
                     self.mini_index += 1;
-                    if self.produced == self.expected { self.phase = Phase::Done; }
-                    else if self.mini_index == self.mini_count { self.phase = Phase::Minimum; }
+                    if self.produced == self.expected {
+                        self.phase = Phase::Done;
+                    } else if self.mini_index == self.mini_count {
+                        self.phase = Phase::Minimum;
+                    }
                 }
                 Phase::Done => break,
             }

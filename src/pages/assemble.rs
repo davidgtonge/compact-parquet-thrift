@@ -33,27 +33,40 @@ impl<'codec, 'workspace, C: Inflate> PageAssembler<'codec, 'workspace, C> {
         let levels = page.v2_levels_size();
         let compressed = page.values_compressed();
         if compressed {
-            if codec.codec_id() != spec.codec { return Err(Error::UnsupportedCodec(spec.codec)); }
+            if codec.codec_id() != spec.codec {
+                return Err(Error::UnsupportedCodec(spec.codec));
+            }
             codec.reset(uncompressed_expected - levels)?;
         }
         let payload_remaining = page.compressed_size();
-        Ok(Self { page, codec, payload_remaining, uncompressed_expected,
-            decoded: 0, uncompressed_levels_remaining: levels,
-            compressed, crc: !0u32, expected_crc: header.crc.map(|x| x as u32),
-            completed: false })
+        Ok(Self {
+            page,
+            codec,
+            payload_remaining,
+            uncompressed_expected,
+            decoded: 0,
+            uncompressed_levels_remaining: levels,
+            compressed,
+            crc: !0u32,
+            expected_crc: header.crc.map(|x| x as u32),
+            completed: false,
+        })
     }
 
-    pub fn page_kind(&self) -> &'static str { self.page.page_kind() }
-    pub fn remaining(&self) -> usize { self.payload_remaining }
+    pub fn page_kind(&self) -> &'static str {
+        self.page.page_kind()
+    }
+    pub fn remaining(&self) -> usize {
+        self.payload_remaining
+    }
 
     /// All values and borrowed byte fragments are delivered synchronously.
     /// A malformed page may have emitted a prefix of values before returning
     /// an error: downstream state must be transactional per page.
-    pub fn feed(
-        &mut self, input: &[u8],
-        emit: &mut impl for<'ev> PageSink<'ev>,
-    ) -> Result<usize> {
-        if self.completed { return Err(Error::InvalidHeader); }
+    pub fn feed(&mut self, input: &[u8], emit: &mut impl for<'ev> PageSink<'ev>) -> Result<usize> {
+        if self.completed {
+            return Err(Error::InvalidHeader);
+        }
         let n = input.len().min(self.payload_remaining);
         let input = &input[..n];
         self.crc = update_crc32(self.crc, input);
@@ -61,7 +74,9 @@ impl<'codec, 'workspace, C: Inflate> PageAssembler<'codec, 'workspace, C> {
         if self.uncompressed_levels_remaining > 0 {
             let levels = self.uncompressed_levels_remaining.min(n);
             let used = self.page.feed(&input[..levels], emit)?;
-            if used != levels { return Err(Error::LengthMismatch); }
+            if used != levels {
+                return Err(Error::LengthMismatch);
+            }
             self.decoded += levels;
             self.uncompressed_levels_remaining -= levels;
             at = levels;
@@ -72,14 +87,25 @@ impl<'codec, 'workspace, C: Inflate> PageAssembler<'codec, 'workspace, C> {
                 let decoded = &mut self.decoded;
                 let max = self.uncompressed_expected;
                 self.codec.push(&input[at..], &mut |out| {
-                    *decoded = decoded.checked_add(out.len()).ok_or(Error::InvalidPageSize)?;
-                    if *decoded > max { return Err(Error::LengthMismatch); }
-                    if page.feed(out, emit)? != out.len() { return Err(Error::LengthMismatch); }
+                    *decoded = decoded
+                        .checked_add(out.len())
+                        .ok_or(Error::InvalidPageSize)?;
+                    if *decoded > max {
+                        return Err(Error::LengthMismatch);
+                    }
+                    if page.feed(out, emit)? != out.len() {
+                        return Err(Error::LengthMismatch);
+                    }
                     Ok(())
                 })?;
             } else {
-                self.decoded = self.decoded.checked_add(n - at).ok_or(Error::InvalidPageSize)?;
-                if self.decoded > self.uncompressed_expected { return Err(Error::LengthMismatch); }
+                self.decoded = self
+                    .decoded
+                    .checked_add(n - at)
+                    .ok_or(Error::InvalidPageSize)?;
+                if self.decoded > self.uncompressed_expected {
+                    return Err(Error::LengthMismatch);
+                }
                 if self.page.feed(&input[at..], emit)? != n - at {
                     return Err(Error::LengthMismatch);
                 }
@@ -91,7 +117,9 @@ impl<'codec, 'workspace, C: Inflate> PageAssembler<'codec, 'workspace, C> {
 
     /// Ends one page and checks all lengths, value counts and optional CRC32.
     pub fn finish(&mut self, emit: &mut impl for<'ev> PageSink<'ev>) -> Result<()> {
-        if self.completed { return Err(Error::InvalidHeader); }
+        if self.completed {
+            return Err(Error::InvalidHeader);
+        }
         if self.payload_remaining != 0 || self.uncompressed_levels_remaining != 0 {
             return Err(Error::Truncated);
         }
@@ -100,17 +128,27 @@ impl<'codec, 'workspace, C: Inflate> PageAssembler<'codec, 'workspace, C> {
             let decoded = &mut self.decoded;
             let max = self.uncompressed_expected;
             self.codec.finish(&mut |out| {
-                *decoded = decoded.checked_add(out.len()).ok_or(Error::InvalidPageSize)?;
-                if *decoded > max { return Err(Error::LengthMismatch); }
-                if page.feed(out, emit)? != out.len() { return Err(Error::LengthMismatch); }
+                *decoded = decoded
+                    .checked_add(out.len())
+                    .ok_or(Error::InvalidPageSize)?;
+                if *decoded > max {
+                    return Err(Error::LengthMismatch);
+                }
+                if page.feed(out, emit)? != out.len() {
+                    return Err(Error::LengthMismatch);
+                }
                 Ok(())
             })?;
         }
-        if self.decoded != self.uncompressed_expected { return Err(Error::LengthMismatch); }
+        if self.decoded != self.uncompressed_expected {
+            return Err(Error::LengthMismatch);
+        }
         self.page.finish(emit)?;
         if let Some(expected) = self.expected_crc {
             let actual = !self.crc;
-            if actual != expected { return Err(Error::ChecksumMismatch { actual, expected }); }
+            if actual != expected {
+                return Err(Error::ChecksumMismatch { actual, expected });
+            }
         }
         self.completed = true;
         Ok(())

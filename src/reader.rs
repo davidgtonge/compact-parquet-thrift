@@ -26,7 +26,11 @@ impl Field {
     }
 
     pub fn expect(self, kind: WireType) -> Result<()> {
-        if self.kind == kind { Ok(()) } else { Err(Error::UnexpectedWireType) }
+        if self.kind == kind {
+            Ok(())
+        } else {
+            Err(Error::UnexpectedWireType)
+        }
     }
 }
 
@@ -56,11 +60,15 @@ pub struct StructReader<'r, 'a> {
 
 impl<'r, 'a> Deref for StructReader<'r, 'a> {
     type Target = Reader<'a>;
-    fn deref(&self) -> &Self::Target { &*self.reader }
+    fn deref(&self) -> &Self::Target {
+        &*self.reader
+    }
 }
 
 impl<'r, 'a> DerefMut for StructReader<'r, 'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target { &mut *self.reader }
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut *self.reader
+    }
 }
 
 impl<'r, 'a> Drop for StructReader<'r, 'a> {
@@ -71,7 +79,9 @@ impl<'r, 'a> Drop for StructReader<'r, 'a> {
 
 impl<'r, 'a> StructReader<'r, 'a> {
     pub fn next_field(&mut self) -> Result<Option<Field>> {
-        if self.ended { return Ok(None); }
+        if self.ended {
+            return Ok(None);
+        }
         let header = self.reader.byte()?;
         if header == 0 {
             self.ended = true;
@@ -82,7 +92,9 @@ impl<'r, 'a> StructReader<'r, 'a> {
         let id = if delta == 0 {
             self.reader.i16()?
         } else {
-            self.last_id.checked_add(delta).ok_or(Error::IntegerOverflow)?
+            self.last_id
+                .checked_add(delta)
+                .ok_or(Error::IntegerOverflow)?
         };
         self.last_id = id;
         Ok(Some(Field { id, kind }))
@@ -91,15 +103,29 @@ impl<'r, 'a> StructReader<'r, 'a> {
 
 impl<'a> Reader<'a> {
     pub const fn new(input: &'a [u8]) -> Self {
-        Self { input, offset: 0, depth: 0, max_depth: 64 }
+        Self {
+            input,
+            offset: 0,
+            depth: 0,
+            max_depth: 64,
+        }
     }
 
     pub const fn with_max_depth(input: &'a [u8], max_depth: u16) -> Self {
-        Self { input, offset: 0, depth: 0, max_depth }
+        Self {
+            input,
+            offset: 0,
+            depth: 0,
+            max_depth,
+        }
     }
 
-    pub const fn position(&self) -> usize { self.offset }
-    pub fn remaining(&self) -> usize { self.input.len() - self.offset }
+    pub const fn position(&self) -> usize {
+        self.offset
+    }
+    pub fn remaining(&self) -> usize {
+        self.input.len() - self.offset
+    }
 
     /// Independent cursor over the same window. Depth starts at zero so a
     /// nested value can be walked twice without sharing the parent's budget.
@@ -145,23 +171,33 @@ impl<'a> Reader<'a> {
         let mut result = 0_u64;
         for shift in (0..=63).step_by(7) {
             let b = self.byte()?;
-            if shift == 63 && b > 1 { return Err(Error::InvalidVarint); }
+            if shift == 63 && b > 1 {
+                return Err(Error::InvalidVarint);
+            }
             result |= ((b & 0x7f) as u64) << shift;
-            if b & 0x80 == 0 { return Ok(result); }
+            if b & 0x80 == 0 {
+                return Ok(result);
+            }
         }
         Err(Error::InvalidVarint)
     }
 
     pub fn var_u32(&mut self) -> Result<u32> {
-        self.var_u64()?.try_into().map_err(|_| Error::IntegerOverflow)
+        self.var_u64()?
+            .try_into()
+            .map_err(|_| Error::IntegerOverflow)
     }
 
     pub fn i16(&mut self) -> Result<i16> {
-        unzigzag_u64(self.var_u32()? as u64).try_into().map_err(|_| Error::IntegerOverflow)
+        unzigzag_u64(self.var_u32()? as u64)
+            .try_into()
+            .map_err(|_| Error::IntegerOverflow)
     }
 
     pub fn i32(&mut self) -> Result<i32> {
-        unzigzag_u64(self.var_u32()? as u64).try_into().map_err(|_| Error::IntegerOverflow)
+        unzigzag_u64(self.var_u32()? as u64)
+            .try_into()
+            .map_err(|_| Error::IntegerOverflow)
     }
 
     pub fn i64(&mut self) -> Result<i64> {
@@ -169,7 +205,9 @@ impl<'a> Reader<'a> {
     }
 
     pub fn f64(&mut self) -> Result<f64> {
-        Ok(f64::from_le_bytes(self.take(8)?.try_into().map_err(|_| Error::EndOfInput)?))
+        Ok(f64::from_le_bytes(
+            self.take(8)?.try_into().map_err(|_| Error::EndOfInput)?,
+        ))
     }
 
     /// The Compact Protocol uses 1 for true, 2 for false in collections.
@@ -197,27 +235,44 @@ impl<'a> Reader<'a> {
 
     pub fn list_header(&mut self) -> Result<ListHeader> {
         let b = self.byte()?;
-        let len = if b >> 4 == 15 { self.var_u32()? } else { (b >> 4) as u32 };
+        let len = if b >> 4 == 15 {
+            self.var_u32()?
+        } else {
+            (b >> 4) as u32
+        };
         let element = WireType::try_from(b & 15)?;
         Ok(ListHeader { len, element })
     }
 
     /// Sets have the same wire representation as lists.
-    pub fn set_header(&mut self) -> Result<ListHeader> { self.list_header() }
+    pub fn set_header(&mut self) -> Result<ListHeader> {
+        self.list_header()
+    }
 
     pub fn map_header(&mut self) -> Result<MapHeader> {
         let len = self.var_u32()?;
-        if len == 0 { return Ok(MapHeader { len, types: None }); }
+        if len == 0 {
+            return Ok(MapHeader { len, types: None });
+        }
         let b = self.byte()?;
         let key = WireType::try_from(b >> 4)?;
         let val = WireType::try_from(b & 15)?;
-        Ok(MapHeader { len, types: Some((key, val)) })
+        Ok(MapHeader {
+            len,
+            types: Some((key, val)),
+        })
     }
 
     pub fn structure(&mut self) -> Result<StructReader<'_, 'a>> {
-        if self.depth >= self.max_depth { return Err(Error::DepthLimit); }
+        if self.depth >= self.max_depth {
+            return Err(Error::DepthLimit);
+        }
         self.depth += 1;
-        Ok(StructReader { reader: self, last_id: 0, ended: false })
+        Ok(StructReader {
+            reader: self,
+            last_id: 0,
+            ended: false,
+        })
     }
 
     /// Consume the wire representation of an unknown value without allocating.
@@ -236,24 +291,44 @@ impl<'a> Reader<'a> {
     fn skip_inner(&mut self, kind: WireType, budget: u16, is_field: bool) -> Result<()> {
         match kind {
             WireType::BoolTrue | WireType::BoolFalse => {
-                if !is_field { self.bool_element()?; }
+                if !is_field {
+                    self.bool_element()?;
+                }
             }
-            WireType::Byte => { self.byte()?; }
-            WireType::I16 => { self.i16()?; }
-            WireType::I32 => { self.i32()?; }
-            WireType::I64 => { self.i64()?; }
-            WireType::Double => { self.take(8)?; }
-            WireType::Binary => { self.binary()?; }
-            WireType::Uuid => { self.take(16)?; }
+            WireType::Byte => {
+                self.byte()?;
+            }
+            WireType::I16 => {
+                self.i16()?;
+            }
+            WireType::I32 => {
+                self.i32()?;
+            }
+            WireType::I64 => {
+                self.i64()?;
+            }
+            WireType::Double => {
+                self.take(8)?;
+            }
+            WireType::Binary => {
+                self.binary()?;
+            }
+            WireType::Uuid => {
+                self.take(16)?;
+            }
             WireType::List | WireType::Set => {
-                if budget == 0 { return Err(Error::DepthLimit); }
+                if budget == 0 {
+                    return Err(Error::DepthLimit);
+                }
                 let header = self.list_header()?;
                 for _ in 0..header.len {
                     self.skip_inner(header.element, budget - 1, false)?;
                 }
             }
             WireType::Map => {
-                if budget == 0 { return Err(Error::DepthLimit); }
+                if budget == 0 {
+                    return Err(Error::DepthLimit);
+                }
                 let header = self.map_header()?;
                 if let Some((key, value)) = header.types {
                     for _ in 0..header.len {
@@ -263,7 +338,9 @@ impl<'a> Reader<'a> {
                 }
             }
             WireType::Struct => {
-                if budget == 0 { return Err(Error::DepthLimit); }
+                if budget == 0 {
+                    return Err(Error::DepthLimit);
+                }
                 let mut s = self.structure()?;
                 while let Some(field) = s.next_field()? {
                     s.reader.skip_inner(field.kind, budget - 1, true)?;

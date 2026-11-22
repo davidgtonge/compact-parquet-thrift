@@ -13,7 +13,9 @@ const MINI: usize = 32;
 
 pub fn delta_binary_bound(count: usize, width_bytes: usize) -> Option<usize> {
     let header = 32usize;
-    if count <= 1 { return Some(header); }
+    if count <= 1 {
+        return Some(header);
+    }
     let blocks = (count - 1).div_ceil(BLOCK);
     let per_block = 16usize.checked_add(BLOCK.checked_mul(width_bytes)?)?;
     header.checked_add(blocks.checked_mul(per_block)?)
@@ -45,30 +47,42 @@ pub fn encode_delta_length_bytes(values: &[&[u8]], out: &mut [u8]) -> Result<usi
 pub fn encode_delta_bytes(values: &[&[u8]], out: &mut [u8]) -> Result<usize> {
     check_byte_lengths(values)?;
     let prefixes = encode_values(values.len(), &|i| prefix_len(values, i) as i32, out)?;
-    let suffixes = encode_values(values.len(), &|i| {
-        (values[i].len() - prefix_len(values, i)) as i32
-    }, &mut out[prefixes..])?;
+    let suffixes = encode_values(
+        values.len(),
+        &|i| (values[i].len() - prefix_len(values, i)) as i32,
+        &mut out[prefixes..],
+    )?;
     let at = prefixes + suffixes;
-    let payload = copy_bytes(values.iter().enumerate().map(|(i, value)| {
-        &value[prefix_len(values, i)..]
-    }), &mut out[at..])?;
+    let payload = copy_bytes(
+        values
+            .iter()
+            .enumerate()
+            .map(|(i, value)| &value[prefix_len(values, i)..]),
+        &mut out[at..],
+    )?;
     Ok(at + payload)
 }
 
 fn check_byte_lengths(values: &[&[u8]]) -> Result<()> {
     for value in values {
-        if value.len() > i32::MAX as usize { return Err(EncodeError::Overflow); }
+        if value.len() > i32::MAX as usize {
+            return Err(EncodeError::Overflow);
+        }
     }
     Ok(())
 }
 
 fn prefix_len(values: &[&[u8]], index: usize) -> usize {
-    if index == 0 { return 0; }
+    if index == 0 {
+        return 0;
+    }
     let previous = values[index - 1];
     let current = values[index];
     let n = previous.len().min(current.len());
     let mut at = 0;
-    while at < n && previous[at] == current[at] { at += 1; }
+    while at < n && previous[at] == current[at] {
+        at += 1;
+    }
     at
 }
 
@@ -76,7 +90,9 @@ fn copy_bytes<'a>(values: impl Iterator<Item = &'a [u8]>, out: &mut [u8]) -> Res
     let mut at = 0usize;
     for value in values {
         let end = at.checked_add(value.len()).ok_or(EncodeError::Overflow)?;
-        if end > out.len() { return Err(EncodeError::OutputFull); }
+        if end > out.len() {
+            return Err(EncodeError::OutputFull);
+        }
         out[at..end].copy_from_slice(value);
         at = end;
     }
@@ -93,8 +109,12 @@ trait DeltaInt: Copy + Ord {
 
 impl DeltaInt for i32 {
     const BITS: u8 = 32;
-    fn zero() -> Self { 0 }
-    fn delta(self, previous: Self) -> Self { self.wrapping_sub(previous) }
+    fn zero() -> Self {
+        0
+    }
+    fn delta(self, previous: Self) -> Self {
+        self.wrapping_sub(previous)
+    }
     fn zigzag(self) -> u64 {
         u64::from(((self as u32) << 1) ^ ((self >> 31) as u32))
     }
@@ -105,8 +125,12 @@ impl DeltaInt for i32 {
 
 impl DeltaInt for i64 {
     const BITS: u8 = 64;
-    fn zero() -> Self { 0 }
-    fn delta(self, previous: Self) -> Self { self.wrapping_sub(previous) }
+    fn zero() -> Self {
+        0
+    }
+    fn delta(self, previous: Self) -> Self {
+        self.wrapping_sub(previous)
+    }
     fn zigzag(self) -> u64 {
         ((self as u64) << 1) ^ ((self >> 63) as u64)
     }
@@ -134,14 +158,25 @@ fn encode_values<T: DeltaInt>(
         let mut widths = [0u8; MINI_COUNT];
         for mini in 0..MINI_COUNT {
             let start = index + mini * MINI;
-            if start >= end { break; }
+            if start >= end {
+                break;
+            }
             widths[mini] = mini_width(value_at, start, (start + MINI).min(end), min_delta);
         }
         cursor.write(&widths)?;
         for mini in 0..MINI_COUNT {
             let start = index + mini * MINI;
-            if start >= end { break; }
-            pack_mini(&mut cursor, value_at, start, (start + MINI).min(end), min_delta, widths[mini])?;
+            if start >= end {
+                break;
+            }
+            pack_mini(
+                &mut cursor,
+                value_at,
+                start,
+                (start + MINI).min(end),
+                min_delta,
+                widths[mini],
+            )?;
         }
         index = end;
     }
@@ -154,7 +189,9 @@ fn block_min<T: DeltaInt>(value_at: &impl Fn(usize) -> T, start: usize, end: usi
     for index in start..end {
         let current = value_at(index);
         let delta = current.delta(previous);
-        if delta < min_delta { min_delta = delta; }
+        if delta < min_delta {
+            min_delta = delta;
+        }
         previous = current;
     }
     min_delta
@@ -173,7 +210,11 @@ fn mini_width<T: DeltaInt>(
         max_residual = max_residual.max(current.delta(previous).residual(min_delta));
         previous = current;
     }
-    if max_residual == 0 { 0 } else { (64 - max_residual.leading_zeros()) as u8 }
+    if max_residual == 0 {
+        0
+    } else {
+        (64 - max_residual.leading_zeros()) as u8
+    }
 }
 
 fn pack_mini<T: DeltaInt>(
@@ -184,11 +225,17 @@ fn pack_mini<T: DeltaInt>(
     min_delta: T,
     width: u8,
 ) -> Result<()> {
-    if width == 0 { return Ok(()); }
-    if width > T::BITS { return Err(EncodeError::ValueOutOfRange); }
+    if width == 0 {
+        return Ok(());
+    }
+    if width > T::BITS {
+        return Err(EncodeError::ValueOutOfRange);
+    }
     let nbytes = MINI * usize::from(width) / 8;
     let mut packed = [0u8; 256];
-    if nbytes > packed.len() { return Err(EncodeError::Overflow); }
+    if nbytes > packed.len() {
+        return Err(EncodeError::Overflow);
+    }
     let mut previous = value_at(start - 1);
     let mut acc = 0u128;
     let mut nbits = 0u32;
@@ -202,7 +249,9 @@ fn pack_mini<T: DeltaInt>(
         } else {
             0
         };
-        if width < 64 && residual >> width != 0 { return Err(EncodeError::ValueOutOfRange); }
+        if width < 64 && residual >> width != 0 {
+            return Err(EncodeError::ValueOutOfRange);
+        }
         acc |= u128::from(residual) << nbits;
         nbits += u32::from(width);
         while nbits >= 8 {
@@ -212,6 +261,8 @@ fn pack_mini<T: DeltaInt>(
             nbits -= 8;
         }
     }
-    if at != nbytes || nbits != 0 { return Err(EncodeError::ValueOutOfRange); }
+    if at != nbytes || nbits != 0 {
+        return Err(EncodeError::ValueOutOfRange);
+    }
     out.write(&packed[..nbytes])
 }
