@@ -4,7 +4,7 @@
 //! decoder cannot emit correctly positioned nullable values until those levels
 //! have arrived; the reusable presence bitmap is the minimal general buffer.
 
-use super::{Error, Layout, PageKind, Result};
+use super::{Error, PageKind, PageLayout, Result};
 use crate::parquet::PageHeader;
 use crate::values::{
     ByteArrayEvent, ByteArrays, DeltaBinary, DeltaByteArrays, DeltaByteParts,
@@ -12,31 +12,53 @@ use crate::values::{
     RleBool,
 };
 
+/// Parquet physical types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Physical {
+    /// `BOOLEAN`.
     Boolean,
+    /// `INT32`.
     Int32,
+    /// `INT64`.
     Int64,
+    /// `INT96` (legacy timestamps).
     Int96,
+    /// `FLOAT`.
     Float,
+    /// `DOUBLE`.
     Double,
+    /// `BYTE_ARRAY`.
     ByteArray,
+    /// `FIXED_LEN_BYTE_ARRAY` of the given length.
     FixedByteArray(u32),
 }
 
+/// What the page decoder needs to know about a column, and the limits it
+/// enforces on untrusted page headers.
 #[derive(Debug, Clone, Copy)]
 pub struct ColumnSpec {
+    /// Physical type.
     pub physical: Physical,
-    pub codec: i32,               // parquet.thrift CompressionCodec
-    pub max_definition_level: u8, // 0 = required; 1 = optional
-    pub max_repetition_level: u8, // must be zero
+    /// `parquet.thrift` `CompressionCodec` of the column chunk.
+    pub codec: i32,
+    /// 0 for a required column, 1 for an optional one.
+    pub max_definition_level: u8,
+    /// Must be zero: repeated columns are not supported.
+    pub max_repetition_level: u8,
+    /// Entries in the chunk's dictionary page, for dictionary-encoded pages.
     pub dictionary_size: Option<u32>,
+    /// Largest accepted compressed or uncompressed page body.
     pub max_page_bytes: usize,
+    /// Largest accepted value count per page.
     pub max_page_values: usize,
+    /// Largest accepted single byte-array value.
     pub max_value_bytes: u32,
 }
 
 impl ColumnSpec {
+    /// A required flat column with default limits (16 MiB pages,
+    /// 1 Mi values per page, 1 MiB values).
+    #[must_use]
     pub const fn flat(physical: Physical, codec: i32) -> Self {
         Self {
             physical,
@@ -49,10 +71,14 @@ impl ColumnSpec {
             max_value_bytes: 1_048_576,
         }
     }
+    /// Mark the column optional (one definition level).
+    #[must_use]
     pub const fn optional(mut self) -> Self {
         self.max_definition_level = 1;
         self
     }
+    /// Set the dictionary size used to bound dictionary ids.
+    #[must_use]
     pub const fn with_dictionary(mut self, length: u32) -> Self {
         self.dictionary_size = Some(length);
         self
@@ -62,13 +88,19 @@ impl ColumnSpec {
 /// All workspaces are borrowed. Unused slices can be empty; delta-string
 /// paths need `lengths` or `parts` sized for *non-null values*, not rows.
 pub struct DecodeWorkspace<'a> {
+    /// One bit per row for optional columns: `ceil(rows / 8)` bytes.
     pub present: &'a mut [u8],
+    /// Mini-block widths for delta encodings (commonly 4 bytes).
     pub widths: &'a mut [u8],
+    /// One length per value for `DELTA_LENGTH_BYTE_ARRAY`.
     pub lengths: &'a mut [u32],
+    /// One prefix/suffix pair per value for `DELTA_BYTE_ARRAY`.
     pub parts: &'a mut [DeltaByteParts],
+    /// The longest value, for `DELTA_BYTE_ARRAY` prefix reconstruction.
     pub previous: &'a mut [u8],
 }
 
+#[derive(Default)]
 struct ValueScratch<'a> {
     widths: &'a mut [u8],
     lengths: &'a mut [u32],
@@ -76,29 +108,46 @@ struct ValueScratch<'a> {
     previous: &'a mut [u8],
 }
 
+/// Where a decoded value belongs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Location {
+    /// Row index within a data page.
     Row(u32),
+    /// Entry index within a dictionary page.
     Dictionary(u32),
 }
 
+/// One decoded physical value, or one piece of a byte array.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Value<'a> {
+    /// `BOOLEAN`.
     Boolean(bool),
+    /// `INT32`.
     I32(i32),
+    /// `INT64`.
     I64(i64),
+    /// `INT96` raw bytes.
     Int96(Int96),
+    /// `FLOAT`.
     F32(f32),
+    /// `DOUBLE`.
     F64(f64),
+    /// An index into the column's dictionary page.
     DictionaryId(u32),
+    /// A byte array of this many bytes begins.
     BytesStart(u32),
+    /// The next fragment of the current byte array.
     BytesChunk(&'a [u8]),
+    /// The current byte array is complete.
     BytesEnd,
 }
 
+/// One event from a page decoder.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PageEvent<'a> {
+    /// The row is null.
     Null(u32),
+    /// A value, or byte-array piece, at a location.
     Value(Location, Value<'a>),
 }
 
@@ -109,6 +158,7 @@ pub enum PageEvent<'a> {
 /// `BytesChunk` data refers to either the caller's input or a caller-owned
 /// scratch buffer, and only for the duration of `on_page`.
 pub trait PageSink<'a> {
+    /// Receive one event.
     fn on_page(&mut self, event: PageEvent<'a>);
 }
 
@@ -121,27 +171,32 @@ where
     }
 }
 
+/// Assigns decoded values to rows, emitting nulls for absent rows.
 struct RowCursor {
-    count: usize,
-    index: usize,
+    count: u32,
+    index: u32,
     active_binary: Option<Location>,
-    dictionary: bool,
+    location: fn(u32) -> Location,
     optional: bool,
 }
 
 impl RowCursor {
-    fn new(count: usize, kind: PageKind, optional: bool) -> Self {
+    fn new(count: u32, kind: PageKind, optional: bool) -> Self {
         Self {
             count,
             index: 0,
             active_binary: None,
-            dictionary: kind == PageKind::Dictionary,
+            location: if kind == PageKind::Dictionary {
+                Location::Dictionary
+            } else {
+                Location::Row
+            },
             optional,
         }
     }
 
-    fn is_present(&self, bits: &[u8], row: usize) -> bool {
-        !self.optional || (bits[row >> 3] & (1 << (row & 7))) != 0
+    fn is_present(&self, bits: &[u8], row: u32) -> bool {
+        !self.optional || (bits[(row >> 3) as usize] & (1 << (row & 7))) != 0
     }
 
     fn next(&mut self, bits: &[u8], emit: &mut impl for<'ev> PageSink<'ev>) -> Result<Location> {
@@ -149,14 +204,9 @@ impl RowCursor {
             let index = self.index;
             self.index += 1;
             if self.is_present(bits, index) {
-                let index = index as u32; // max_page_values is capped at < u32::MAX
-                return Ok(if self.dictionary {
-                    Location::Dictionary(index)
-                } else {
-                    Location::Row(index)
-                });
+                return Ok((self.location)(index));
             }
-            emit.on_page(PageEvent::Null(index as u32));
+            emit.on_page(PageEvent::Null(index));
         }
         Err(Error::TooManyValues)
     }
@@ -212,7 +262,7 @@ impl RowCursor {
             if self.is_present(bits, index) {
                 return Err(Error::MissingValues);
             }
-            emit.on_page(PageEvent::Null(index as u32));
+            emit.on_page(PageEvent::Null(index));
         }
         Ok(())
     }
@@ -236,6 +286,8 @@ enum Values<'a> {
 }
 
 impl<'a> Values<'a> {
+    // The scratch borrows move into whichever decoder needs them.
+    #[allow(clippy::needless_pass_by_value)]
     fn new(spec: ColumnSpec, encoding: i32, count: usize, ws: ValueScratch<'a>) -> Result<Self> {
         let count64 = count as u64;
         Ok(match (encoding, spec.physical) {
@@ -247,10 +299,9 @@ impl<'a> Values<'a> {
             (0, Physical::Double) => Self::F64(PlainValues::new(count64)),
             (0, Physical::ByteArray) => Self::Bytes(ByteArrays::new(count64, spec.max_value_bytes)),
             (0, Physical::FixedByteArray(n)) => Self::Fixed(FixedByteArrays::new(count64, n)?),
-            (3, Physical::Boolean) => Self::BoolRle(RleBool::new(
-                count64,
-                spec.max_page_bytes.min(u32::MAX as usize) as u32,
-            )?),
+            (3, Physical::Boolean) => {
+                Self::BoolRle(RleBool::new(count64, saturating_u32(spec.max_page_bytes))?)
+            }
             (2 | 8, _) => Self::Dictionary(DictionaryIds::new(
                 count64,
                 spec.dictionary_size.ok_or(Error::InvalidHeader)?,
@@ -368,162 +419,142 @@ impl<'a> Values<'a> {
 
 /// One page at a time, consuming **decompressed** bytes. For V2, feed the
 /// uncompressed definition levels before feeding decompressed values. The
-/// outer PageAssembler handles the codec and compressed payload boundaries.
+/// outer [`PageAssembler`](super::PageAssembler) handles the codec and
+/// compressed payload boundaries.
 pub struct FlatPage<'a> {
-    layout: Layout,
+    layout: PageLayout,
     spec: ColumnSpec,
     present: &'a mut [u8],
-    level: Option<Levels>,
-    level_count: usize,
-    physical_count: usize,
-    scratch: Option<ValueScratch<'a>>,
-    values: Option<Values<'a>>,
+    stage: Stage<'a>,
     rows: RowCursor,
 }
 
+/// Parquet stores all definition levels before any value.
+enum Stage<'a> {
+    /// Optional column: levels fill the presence bitmap; `levels` counts
+    /// rows seen and `present` the rows with a value.
+    Levels {
+        decoder: Levels,
+        scratch: ValueScratch<'a>,
+        levels: usize,
+        present: usize,
+    },
+    Values(Values<'a>),
+}
+
 impl<'a> FlatPage<'a> {
+    /// Start decoding the page described by `header`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NestedColumn`] for a repeated or multi-level column, any
+    /// [`page_layout`](super::page_layout) error, an unsupported encoding,
+    /// or [`Error::WorkspaceTooSmall`].
+    // The workspace's borrows move into the decoder.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn new(header: PageHeader, spec: ColumnSpec, ws: DecodeWorkspace<'a>) -> Result<Self> {
         if spec.max_repetition_level != 0 || spec.max_definition_level > 1 {
             return Err(Error::NestedColumn);
         }
-        let layout = Layout::from_header(header, spec)?;
+        let layout = PageLayout::from_header(header, spec)?;
+        let rows = u32::try_from(layout.count).map_err(|_| Error::InvalidValueCount)?;
         let optional = spec.max_definition_level == 1 && layout.kind != PageKind::Dictionary;
-        let needed = layout.count.div_ceil(8);
-        if optional && ws.present.len() < needed {
-            return Err(Error::WorkspaceTooSmall {
-                needed,
-                available: ws.present.len(),
-            });
-        }
-        if optional {
-            ws.present[..needed].fill(0);
-        }
-        let level = if optional {
-            Some(if layout.kind == PageKind::V2 {
-                Levels::v2(1, layout.count as u64, layout.v2_levels_bytes as u32)?
-            } else {
-                Levels::v1(
-                    1,
-                    layout.count as u64,
-                    layout.uncompressed_bytes.min(u32::MAX as usize) as u32,
-                )?
-            })
-        } else {
-            None
-        };
-        let value_scratch = ValueScratch {
+        let scratch = ValueScratch {
             widths: ws.widths,
             lengths: ws.lengths,
             parts: ws.parts,
             previous: ws.previous,
         };
-        let (scratch, values) = if optional {
-            (Some(value_scratch), None)
+        let stage = if optional {
+            let needed = layout.count.div_ceil(8);
+            let available = ws.present.len();
+            ws.present
+                .get_mut(..needed)
+                .ok_or(Error::WorkspaceTooSmall { needed, available })?
+                .fill(0);
+            let decoder = if layout.kind == PageKind::V2 {
+                let bytes =
+                    u32::try_from(layout.v2_levels_bytes).map_err(|_| Error::InvalidPageSize)?;
+                Levels::v2(1, u64::from(rows), bytes)?
+            } else {
+                Levels::v1(
+                    1,
+                    u64::from(rows),
+                    saturating_u32(layout.uncompressed_bytes),
+                )?
+            };
+            Stage::Levels {
+                decoder,
+                scratch,
+                levels: 0,
+                present: 0,
+            }
         } else {
-            (
-                None,
-                Some(Values::new(
-                    spec,
-                    layout.encoding,
-                    layout.count,
-                    value_scratch,
-                )?),
-            )
+            Stage::Values(Values::new(spec, layout.encoding, layout.count, scratch)?)
         };
         Ok(Self {
             layout,
             spec,
             present: ws.present,
-            level,
-            level_count: 0,
-            physical_count: if optional { 0 } else { layout.count },
-            scratch,
-            values,
-            rows: RowCursor::new(layout.count, layout.kind, optional),
+            stage,
+            rows: RowCursor::new(rows, layout.kind, optional),
         })
     }
 
-    pub fn compressed_size(&self) -> usize {
+    /// Page body size on disk.
+    #[must_use]
+    pub const fn compressed_size(&self) -> usize {
         self.layout.compressed_bytes
     }
-    pub fn uncompressed_size(&self) -> usize {
+
+    /// Page body size after decompression.
+    #[must_use]
+    pub const fn uncompressed_size(&self) -> usize {
         self.layout.uncompressed_bytes
     }
-    pub fn v2_levels_size(&self) -> usize {
+
+    /// Uncompressed V2 level bytes at the start of the body.
+    #[must_use]
+    pub const fn v2_levels_size(&self) -> usize {
         self.layout.v2_levels_bytes
     }
-    pub fn values_compressed(&self) -> bool {
+
+    /// Whether the values section passes through the codec.
+    #[must_use]
+    pub const fn values_compressed(&self) -> bool {
         self.layout.values_compressed
     }
-    pub fn page_kind(&self) -> &'static str {
-        match self.layout.kind {
-            PageKind::V1 => "DATA_PAGE",
-            PageKind::V2 => "DATA_PAGE_V2",
-            PageKind::Dictionary => "DICTIONARY_PAGE",
-        }
+
+    /// The page type's `parquet.thrift` name.
+    #[must_use]
+    pub const fn page_kind(&self) -> &'static str {
+        self.layout.kind.name()
     }
 
+    /// Decode decompressed body bytes; returns bytes consumed. Once every
+    /// value is decoded, trailing writer padding is consumed too.
+    ///
+    /// # Errors
+    ///
+    /// Malformed levels or values, a level or value count that disagrees
+    /// with the header, or an inconsistent V2 null count.
     pub fn feed(&mut self, input: &[u8], emit: &mut impl for<'ev> PageSink<'ev>) -> Result<usize> {
         let mut at = 0;
-        if let Some(level) = &mut self.level {
-            let count = self.layout.count;
-            let bits = &mut *self.present;
-            let levels = &mut self.level_count;
-            let physical = &mut self.physical_count;
-            let mut err = None;
-            while at < input.len() && !level.is_complete() {
-                let used = level.feed(&input[at..], |value| {
-                    if *levels >= count {
-                        err = Some(Error::TooManyValues);
-                        return;
-                    }
-                    if value == 1 {
-                        bits[*levels >> 3] |= 1 << (*levels & 7);
-                        *physical += 1;
-                    }
-                    *levels += 1;
-                })?;
-                if used == 0 {
-                    break;
-                }
-                at += used;
-            }
-            if let Some(e) = err {
-                return Err(e);
-            }
-            if !level.is_complete() {
-                return Ok(at);
-            }
-            if self.level_count != count {
-                return Err(Error::LengthMismatch);
-            }
-            if let Some(expected_nulls) = self.layout.expected_nulls {
-                if count - self.physical_count != expected_nulls {
-                    return Err(Error::InvalidNullCount);
-                }
-            }
-            self.level = None;
-            let scratch = self.scratch.take().ok_or(Error::InvalidHeader)?;
-            self.values = Some(Values::new(
-                self.spec,
-                self.layout.encoding,
-                self.physical_count,
-                scratch,
-            )?);
+        if matches!(self.stage, Stage::Levels { .. }) {
+            at = self.feed_levels(input)?;
         }
-        while at < input.len() {
-            let values = self.values.as_mut().ok_or(Error::InvalidHeader)?;
-            if values.is_complete() {
-                at = input.len();
-                break;
-            }
+        let Stage::Values(values) = &mut self.stage else {
+            // The levels need more input.
+            return Ok(at);
+        };
+        while at < input.len() && !values.is_complete() {
             let used = values.feed(&input[at..], &mut self.rows, self.present, emit)?;
             if used == 0 {
                 break;
             }
             at += used;
         }
-        if self.values.as_ref().is_some_and(Values::is_complete) {
+        if values.is_complete() {
             // The value count ends the page. Writers, notably fastparquet,
             // append unused bytes after the last value.
             at = input.len();
@@ -531,16 +562,86 @@ impl<'a> FlatPage<'a> {
         Ok(at)
     }
 
+    /// Fill the presence bitmap; once the levels are complete, start the
+    /// value decoder for the present rows.
+    fn feed_levels(&mut self, input: &[u8]) -> Result<usize> {
+        let Stage::Levels {
+            decoder,
+            scratch,
+            levels,
+            present,
+        } = &mut self.stage
+        else {
+            return Ok(0);
+        };
+        let count = self.layout.count;
+        let bits = &mut *self.present;
+        let mut at = 0;
+        let mut err = None;
+        while at < input.len() && !decoder.is_complete() {
+            let used = decoder.feed(&input[at..], |level| {
+                if *levels >= count {
+                    err = Some(Error::TooManyValues);
+                    return;
+                }
+                if level == 1 {
+                    bits[*levels >> 3] |= 1 << (*levels & 7);
+                    *present += 1;
+                }
+                *levels += 1;
+            })?;
+            if used == 0 {
+                break;
+            }
+            at += used;
+        }
+        if let Some(e) = err {
+            return Err(e);
+        }
+        if !decoder.is_complete() {
+            return Ok(at);
+        }
+        if *levels != count {
+            return Err(Error::LengthMismatch);
+        }
+        let physical = *present;
+        if self
+            .layout
+            .expected_nulls
+            .is_some_and(|nulls| count - physical != nulls)
+        {
+            return Err(Error::InvalidNullCount);
+        }
+        let scratch = core::mem::take(scratch);
+        self.stage = Stage::Values(Values::new(
+            self.spec,
+            self.layout.encoding,
+            physical,
+            scratch,
+        )?);
+        Ok(at)
+    }
+
+    /// End the page, emitting any trailing nulls.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Truncated`] if levels or values are missing, or
+    /// [`Error::MissingValues`] if present rows received no value.
     pub fn finish(&mut self, emit: &mut impl for<'ev> PageSink<'ev>) -> Result<()> {
+        if matches!(self.stage, Stage::Levels { .. }) {
+            return Err(Error::Truncated);
+        }
         // Some string decoders emit their final End event without consuming a
         // byte. Flush that event before checking completion.
-        if self.level.is_some() {
-            return Err(Error::Truncated);
-        }
         self.feed(&[], emit)?;
-        if !self.values.as_ref().is_some_and(Values::is_complete) {
-            return Err(Error::Truncated);
+        match &self.stage {
+            Stage::Values(values) if values.is_complete() => self.rows.finish(self.present, emit),
+            _ => Err(Error::Truncated),
         }
-        self.rows.finish(self.present, emit)
     }
+}
+
+fn saturating_u32(value: usize) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
 }
