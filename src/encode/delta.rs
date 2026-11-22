@@ -1,4 +1,4 @@
-//! DELTA_BINARY_PACKED, DELTA_LENGTH_BYTE_ARRAY, and DELTA_BYTE_ARRAY.
+//! `DELTA_BINARY_PACKED`, `DELTA_LENGTH_BYTE_ARRAY`, and `DELTA_BYTE_ARRAY`.
 //!
 //! Blocks are 128 values and each block has four mini-blocks of 32. That is
 //! the layout this crate's decoder sizes its width scratch for. The last
@@ -11,6 +11,9 @@ const BLOCK: usize = 128;
 const MINI_COUNT: usize = 4;
 const MINI: usize = 32;
 
+/// Upper bound on the encoded size of `count` delta integers of
+/// `width_bytes` bytes each (4 for `INT32`, 8 for `INT64`).
+#[must_use]
 pub fn delta_binary_bound(count: usize, width_bytes: usize) -> Option<usize> {
     let header = 32usize;
     if count <= 1 {
@@ -21,35 +24,63 @@ pub fn delta_binary_bound(count: usize, width_bytes: usize) -> Option<usize> {
     header.checked_add(blocks.checked_mul(per_block)?)
 }
 
+/// Upper bound on the `DELTA_LENGTH_BYTE_ARRAY` encoding of `count` values
+/// totalling `payload_bytes`.
+#[must_use]
 pub fn delta_length_bound(count: usize, payload_bytes: usize) -> Option<usize> {
     delta_binary_bound(count, 4)?.checked_add(payload_bytes)
 }
 
+/// Upper bound on the `DELTA_BYTE_ARRAY` encoding of `count` values
+/// totalling `payload_bytes`.
+#[must_use]
 pub fn delta_byte_array_bound(count: usize, payload_bytes: usize) -> Option<usize> {
     let lengths = delta_binary_bound(count, 4)?;
     lengths.checked_mul(2)?.checked_add(payload_bytes)
 }
 
+/// `DELTA_BINARY_PACKED` `INT32` values; returns bytes written.
+///
+/// # Errors
+///
+/// [`EncodeError::OutputFull`] if `out` is too small.
 pub fn encode_delta_i32(values: &[i32], out: &mut [u8]) -> Result<usize> {
     encode_values(values.len(), &|i| values[i], out)
 }
 
+/// `DELTA_BINARY_PACKED` `INT64` values; returns bytes written.
+///
+/// # Errors
+///
+/// [`EncodeError::OutputFull`] if `out` is too small.
 pub fn encode_delta_i64(values: &[i64], out: &mut [u8]) -> Result<usize> {
     encode_values(values.len(), &|i| values[i], out)
 }
 
+/// `DELTA_LENGTH_BYTE_ARRAY` values; returns bytes written.
+///
+/// # Errors
+///
+/// [`EncodeError::Overflow`] for a value longer than `i32::MAX`, or
+/// [`EncodeError::OutputFull`].
 pub fn encode_delta_length_bytes(values: &[&[u8]], out: &mut [u8]) -> Result<usize> {
     check_byte_lengths(values)?;
-    let n = encode_values(values.len(), &|i| values[i].len() as i32, out)?;
+    let n = encode_values(values.len(), &|i| byte_len(values[i].len()), out)?;
     copy_bytes(values.iter().copied(), &mut out[n..]).map(|payload| n + payload)
 }
 
+/// `DELTA_BYTE_ARRAY` values (prefix-compressed against the previous
+/// value); returns bytes written.
+///
+/// # Errors
+///
+/// As [`encode_delta_length_bytes`].
 pub fn encode_delta_bytes(values: &[&[u8]], out: &mut [u8]) -> Result<usize> {
     check_byte_lengths(values)?;
-    let prefixes = encode_values(values.len(), &|i| prefix_len(values, i) as i32, out)?;
+    let prefixes = encode_values(values.len(), &|i| byte_len(prefix_len(values, i)), out)?;
     let suffixes = encode_values(
         values.len(),
-        &|i| (values[i].len() - prefix_len(values, i)) as i32,
+        &|i| byte_len(values[i].len() - prefix_len(values, i)),
         &mut out[prefixes..],
     )?;
     let at = prefixes + suffixes;
@@ -64,26 +95,30 @@ pub fn encode_delta_bytes(values: &[&[u8]], out: &mut [u8]) -> Result<usize> {
 }
 
 fn check_byte_lengths(values: &[&[u8]]) -> Result<()> {
-    for value in values {
-        if value.len() > i32::MAX as usize {
-            return Err(EncodeError::Overflow);
-        }
+    if values
+        .iter()
+        .any(|value| i32::try_from(value.len()).is_err())
+    {
+        return Err(EncodeError::Overflow);
     }
     Ok(())
 }
 
+/// A value, prefix or suffix length, already bounded by [`check_byte_lengths`].
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+const fn byte_len(len: usize) -> i32 {
+    len as i32
+}
+
 fn prefix_len(values: &[&[u8]], index: usize) -> usize {
-    if index == 0 {
+    let Some(previous) = index.checked_sub(1).map(|i| values[i]) else {
         return 0;
-    }
-    let previous = values[index - 1];
-    let current = values[index];
-    let n = previous.len().min(current.len());
-    let mut at = 0;
-    while at < n && previous[at] == current[at] {
-        at += 1;
-    }
-    at
+    };
+    previous
+        .iter()
+        .zip(values[index])
+        .take_while(|(a, b)| a == b)
+        .count()
 }
 
 fn copy_bytes<'a>(values: impl Iterator<Item = &'a [u8]>, out: &mut [u8]) -> Result<usize> {
@@ -107,6 +142,8 @@ trait DeltaInt: Copy + Ord {
     fn residual(self, min_delta: Self) -> u64;
 }
 
+// Zigzag and residuals reinterpret two's-complement bits at the physical width.
+#[allow(clippy::cast_sign_loss)]
 impl DeltaInt for i32 {
     const BITS: u8 = 32;
     fn zero() -> Self {
@@ -123,6 +160,7 @@ impl DeltaInt for i32 {
     }
 }
 
+#[allow(clippy::cast_sign_loss)]
 impl DeltaInt for i64 {
     const BITS: u8 = 64;
     fn zero() -> Self {
@@ -155,28 +193,17 @@ fn encode_values<T: DeltaInt>(
         let end = (index + BLOCK).min(count);
         let min_delta = block_min(value_at, index, end);
         cursor.write_uleb(min_delta.zigzag())?;
+        // Mini-blocks with a real value; trailing widths stay zero.
+        let minis = (index..end)
+            .step_by(MINI)
+            .map(|start| (start, (start + MINI).min(end)));
         let mut widths = [0u8; MINI_COUNT];
-        for mini in 0..MINI_COUNT {
-            let start = index + mini * MINI;
-            if start >= end {
-                break;
-            }
-            widths[mini] = mini_width(value_at, start, (start + MINI).min(end), min_delta);
+        for ((start, stop), width) in minis.clone().zip(&mut widths) {
+            *width = mini_width(value_at, start, stop, min_delta);
         }
         cursor.write(&widths)?;
-        for mini in 0..MINI_COUNT {
-            let start = index + mini * MINI;
-            if start >= end {
-                break;
-            }
-            pack_mini(
-                &mut cursor,
-                value_at,
-                start,
-                (start + MINI).min(end),
-                min_delta,
-                widths[mini],
-            )?;
+        for ((start, stop), &width) in minis.zip(&widths) {
+            pack_mini(&mut cursor, value_at, start, stop, min_delta, width)?;
         }
         index = end;
     }
@@ -210,11 +237,13 @@ fn mini_width<T: DeltaInt>(
         max_residual = max_residual.max(current.delta(previous).residual(min_delta));
         previous = current;
     }
-    if max_residual == 0 {
-        0
-    } else {
-        (64 - max_residual.leading_zeros()) as u8
-    }
+    bit_width(max_residual)
+}
+
+// At most 64, so the narrowing cast cannot truncate.
+#[allow(clippy::cast_possible_truncation)]
+const fn bit_width(value: u64) -> u8 {
+    (u64::BITS - value.leading_zeros()) as u8
 }
 
 fn pack_mini<T: DeltaInt>(
@@ -255,7 +284,7 @@ fn pack_mini<T: DeltaInt>(
         acc |= u128::from(residual) << nbits;
         nbits += u32::from(width);
         while nbits >= 8 {
-            packed[at] = acc as u8;
+            packed[at] = acc.to_le_bytes()[0];
             at += 1;
             acc >>= 8;
             nbits -= 8;

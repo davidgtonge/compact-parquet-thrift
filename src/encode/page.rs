@@ -12,12 +12,16 @@ use super::plain::{
 };
 use super::rle::{encode_definition_levels, encode_dictionary_ids};
 use super::snappy::compress;
-use super::{thrift_error, value_encoding, ColumnValues, EncodeError, Result};
+use super::{thrift_error, Column, ColumnValues, EncodeError, Result, SNAPPY, UNCOMPRESSED};
 use crate::{SliceSink, Writer};
 
 const HEADER_ROOM: usize = 96;
 
-pub struct PageStat {
+/// `PageType` values written here.
+const DATA_PAGE: i32 = 0;
+const DICTIONARY_PAGE: i32 = 2;
+
+pub(crate) struct PageStat {
     pub on_disk: usize,
     /// On-disk header plus the uncompressed page body.
     pub uncompressed_with_header: usize,
@@ -25,233 +29,107 @@ pub struct PageStat {
     pub dictionary_on_disk: Option<usize>,
 }
 
-pub fn write_column_pages(
+/// Write a column chunk: an optional dictionary page, then one data page.
+pub(crate) fn write_column_pages(
     out: &mut [u8],
-    rows: usize,
-    codec: i32,
-    present: Option<&[u8]>,
-    values: &ColumnValues<'_>,
+    column: &Column<'_>,
     scratch: &mut [u8],
     table: &mut [u32],
 ) -> Result<PageStat> {
-    let mut at = 0;
-    let mut uncompressed = 0usize;
-    let dictionary_on_disk = match values {
-        ColumnValues::DictI32 { dictionary, .. } => {
-            let stat = write_dictionary_page(
-                &mut out[at..],
-                codec,
-                &ColumnValues::I32(dictionary),
-                scratch,
-                table,
-            )?;
-            at += stat.on_disk;
-            uncompressed += stat.uncompressed_with_header;
-            Some(stat.on_disk)
-        }
-        ColumnValues::DictF32 { dictionary, .. } => {
-            let stat = write_dictionary_page(
-                &mut out[at..],
-                codec,
-                &ColumnValues::F32(dictionary),
-                scratch,
-                table,
-            )?;
-            at += stat.on_disk;
-            uncompressed += stat.uncompressed_with_header;
-            Some(stat.on_disk)
-        }
-        ColumnValues::DictF64 { dictionary, .. } => {
-            let stat = write_dictionary_page(
-                &mut out[at..],
-                codec,
-                &ColumnValues::F64(dictionary),
-                scratch,
-                table,
-            )?;
-            at += stat.on_disk;
-            uncompressed += stat.uncompressed_with_header;
-            Some(stat.on_disk)
-        }
-        ColumnValues::DictBytes { dictionary, .. } => {
-            let stat = write_dictionary_page(
-                &mut out[at..],
-                codec,
-                &ColumnValues::Bytes(dictionary),
-                scratch,
-                table,
-            )?;
-            at += stat.on_disk;
-            uncompressed += stat.uncompressed_with_header;
-            Some(stat.on_disk)
-        }
-        ColumnValues::DictI64 { dictionary, .. } => {
-            let stat = write_dictionary_page(
-                &mut out[at..],
-                codec,
-                &ColumnValues::I64(dictionary),
-                scratch,
-                table,
-            )?;
-            at += stat.on_disk;
-            uncompressed += stat.uncompressed_with_header;
-            Some(stat.on_disk)
-        }
-        ColumnValues::DictFixed {
-            width, dictionary, ..
-        } => {
-            let stat = write_dictionary_page(
-                &mut out[at..],
-                codec,
-                &ColumnValues::Fixed {
-                    width: *width,
-                    values: dictionary,
-                },
-                scratch,
-                table,
-            )?;
-            at += stat.on_disk;
-            uncompressed += stat.uncompressed_with_header;
-            Some(stat.on_disk)
-        }
-        _ => None,
-    };
-    let encoding = value_encoding(values);
-    let data = write_data_page(
-        &mut out[at..],
-        rows,
-        encoding,
-        codec,
-        present,
-        values,
-        scratch,
-        table,
-    )?;
+    let dictionary = column
+        .values
+        .dictionary()
+        .map(|(entries, _)| write_dictionary_page(out, column.codec, &entries, scratch, table))
+        .transpose()?;
+    let at = dictionary.as_ref().map_or(0, |page| page.on_disk);
+    let data = write_data_page(&mut out[at..], column, scratch, table)?;
     Ok(PageStat {
         on_disk: at + data.on_disk,
-        uncompressed_with_header: uncompressed + data.uncompressed_with_header,
-        dictionary_on_disk,
+        uncompressed_with_header: dictionary
+            .as_ref()
+            .map_or(0, |page| page.uncompressed_with_header)
+            + data.uncompressed_with_header,
+        dictionary_on_disk: dictionary.map(|page| page.on_disk),
     })
 }
 
 fn write_dictionary_page(
     out: &mut [u8],
     codec: i32,
-    values: &ColumnValues<'_>,
+    entries: &ColumnValues<'_>,
     scratch: &mut [u8],
     table: &mut [u32],
 ) -> Result<PageStat> {
-    let n = encode_plain(values, scratch)?;
-    let count = i32::try_from(plain_len(values)).map_err(|_| EncodeError::Overflow)?;
-    let stat = frame_page(out, 2, count, 0, &scratch[..n], codec, table)?;
-    Ok(PageStat {
-        dictionary_on_disk: None,
-        ..stat
-    })
+    let n = encode_direct(entries, scratch)?;
+    let count = i32::try_from(entries.len()).map_err(|_| EncodeError::Overflow)?;
+    frame_page(out, DICTIONARY_PAGE, count, 0, &scratch[..n], codec, table)
 }
 
 fn write_data_page(
     out: &mut [u8],
-    rows: usize,
-    encoding: i32,
-    codec: i32,
-    present: Option<&[u8]>,
-    values: &ColumnValues<'_>,
+    column: &Column<'_>,
     scratch: &mut [u8],
     table: &mut [u32],
 ) -> Result<PageStat> {
-    let reserve = if present.is_some() {
-        definition_reserve(rows)?
-    } else {
-        0
+    let reserve = match column.present {
+        Some(_) => definition_reserve(column.rows)?,
+        None => 0,
     };
     if scratch.len() < reserve {
         return Err(EncodeError::OutputFull);
     }
-    let value_len = encode_data_values(values, &mut scratch[reserve..])?;
-    let body_len = if let Some(bits) = present {
-        let level_len = encode_definition_levels(rows, bits, &mut scratch[..reserve])?;
+    let value_len = encode_values(&column.values, &mut scratch[reserve..])?;
+    let body_len = if let Some(bits) = column.present {
+        let level_len = encode_definition_levels(column.rows, bits, &mut scratch[..reserve])?;
         scratch.copy_within(reserve..reserve + value_len, level_len);
         level_len + value_len
     } else {
         value_len
     };
-    let count = i32::try_from(rows).map_err(|_| EncodeError::Overflow)?;
-    frame_page(out, 0, count, encoding, &scratch[..body_len], codec, table)
+    let count = i32::try_from(column.rows).map_err(|_| EncodeError::Overflow)?;
+    frame_page(
+        out,
+        DATA_PAGE,
+        count,
+        column.values.encoding(),
+        &scratch[..body_len],
+        column.codec,
+        table,
+    )
 }
 
-fn encode_data_values(values: &ColumnValues<'_>, out: &mut [u8]) -> Result<usize> {
+/// The data page's values section.
+fn encode_values(values: &ColumnValues<'_>, out: &mut [u8]) -> Result<usize> {
+    match values.dictionary() {
+        Some((entries, ids)) => {
+            let len = u32::try_from(entries.len()).map_err(|_| EncodeError::Overflow)?;
+            encode_dictionary_ids(len, ids, out)
+        }
+        None => encode_direct(values, out),
+    }
+}
+
+/// Values that are not dictionary ids: PLAIN or delta.
+fn encode_direct(values: &ColumnValues<'_>, out: &mut [u8]) -> Result<usize> {
     match values {
         ColumnValues::Bool(v) => encode_bool(v, out),
-        ColumnValues::I32(v) => encode_i32(v, out),
+        ColumnValues::I32(v) | ColumnValues::Date(v) => encode_i32(v, out),
         ColumnValues::I64(v) => encode_i64(v, out),
         ColumnValues::F32(v) => encode_f32(v, out),
         ColumnValues::F64(v) => encode_f64(v, out),
         ColumnValues::Bytes(v) => encode_bytes(v, out),
         ColumnValues::Fixed { width, values } => encode_fixed(*width, values, out),
-        ColumnValues::Date(v) => encode_i32(v, out),
-        ColumnValues::DictI32 { dictionary, ids } => {
-            encode_dictionary_ids(dict_len(dictionary.len())?, ids, out)
-        }
-        ColumnValues::DictI64 { dictionary, ids } => {
-            encode_dictionary_ids(dict_len(dictionary.len())?, ids, out)
-        }
-        ColumnValues::DictF32 { dictionary, ids } => {
-            encode_dictionary_ids(dict_len(dictionary.len())?, ids, out)
-        }
-        ColumnValues::DictF64 { dictionary, ids } => {
-            encode_dictionary_ids(dict_len(dictionary.len())?, ids, out)
-        }
-        ColumnValues::DictBytes { dictionary, ids } => {
-            encode_dictionary_ids(dict_len(dictionary.len())?, ids, out)
-        }
-        ColumnValues::DictFixed {
-            dictionary, ids, ..
-        } => encode_dictionary_ids(dict_len(dictionary.len())?, ids, out),
         ColumnValues::DeltaI32(v) => encode_delta_i32(v, out),
         ColumnValues::DeltaI64(v) => encode_delta_i64(v, out),
         ColumnValues::DeltaLengthBytes(v) => encode_delta_length_bytes(v, out),
         ColumnValues::DeltaBytes(v) => encode_delta_bytes(v, out),
-    }
-}
-
-fn encode_plain(values: &ColumnValues<'_>, out: &mut [u8]) -> Result<usize> {
-    match values {
         ColumnValues::DictI32 { .. }
         | ColumnValues::DictI64 { .. }
         | ColumnValues::DictF32 { .. }
         | ColumnValues::DictF64 { .. }
         | ColumnValues::DictBytes { .. }
         | ColumnValues::DictFixed { .. } => Err(EncodeError::ValueCount),
-        other => encode_data_values(other, out),
     }
-}
-
-fn plain_len(values: &ColumnValues<'_>) -> usize {
-    match values {
-        ColumnValues::Bool(v) => v.len(),
-        ColumnValues::I32(v) => v.len(),
-        ColumnValues::I64(v) => v.len(),
-        ColumnValues::F32(v) => v.len(),
-        ColumnValues::F64(v) => v.len(),
-        ColumnValues::Bytes(v)
-        | ColumnValues::DeltaLengthBytes(v)
-        | ColumnValues::DeltaBytes(v) => v.len(),
-        ColumnValues::Fixed { values, .. } => values.len(),
-        ColumnValues::Date(v) => v.len(),
-        ColumnValues::DictI32 { .. }
-        | ColumnValues::DictI64 { .. }
-        | ColumnValues::DictF32 { .. }
-        | ColumnValues::DictF64 { .. }
-        | ColumnValues::DictBytes { .. }
-        | ColumnValues::DictFixed { .. } => 0,
-        ColumnValues::DeltaI32(v) => v.len(),
-        ColumnValues::DeltaI64(v) => v.len(),
-    }
-}
-
-fn dict_len(len: usize) -> Result<u32> {
-    u32::try_from(len).map_err(|_| EncodeError::Overflow)
 }
 
 fn definition_reserve(rows: usize) -> Result<usize> {
@@ -271,14 +149,13 @@ fn frame_page(
     table: &mut [u32],
 ) -> Result<PageStat> {
     let compressed_len = match codec {
-        0 => {
-            if out.len() < body.len() {
-                return Err(EncodeError::OutputFull);
-            }
-            out[..body.len()].copy_from_slice(body);
+        UNCOMPRESSED => {
+            out.get_mut(..body.len())
+                .ok_or(EncodeError::OutputFull)?
+                .copy_from_slice(body);
             body.len()
         }
-        1 => compress(body, out, table)?,
+        SNAPPY => compress(body, out, table)?,
         _ => return Err(EncodeError::UnsupportedCodec),
     };
     let mut header = [0u8; HEADER_ROOM];
@@ -321,20 +198,19 @@ fn page_header(
             w.field_i32(1, page_type)?;
             w.field_i32(2, uncompressed)?;
             w.field_i32(3, compressed)?;
-            if page_type == 2 {
+            if page_type == DICTIONARY_PAGE {
                 w.field_struct(7, |w| {
                     w.field_i32(1, num_values)?;
-                    w.field_i32(2, 0)
-                })?;
+                    w.field_i32(2, 0) // PLAIN
+                })
             } else {
                 w.field_struct(5, |w| {
                     w.field_i32(1, num_values)?;
                     w.field_i32(2, value_encoding)?;
-                    w.field_i32(3, 3)?;
-                    w.field_i32(4, 3)
-                })?;
+                    w.field_i32(3, 3)?; // definition levels: RLE
+                    w.field_i32(4, 3) // repetition levels: RLE
+                })
             }
-            Ok(())
         })
         .map_err(thrift_error)?;
     Ok(writer.into_inner().len())

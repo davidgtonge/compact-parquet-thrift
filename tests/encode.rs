@@ -1,4 +1,5 @@
-//! Round-trip the encoder through this crate's decoder, then through DuckDB.
+//! Round-trip the encoder through this crate's decoder, then through DuckDB
+//! when the `DUCKDB` environment variable names a DuckDB CLI binary.
 
 use std::process::Command;
 
@@ -209,10 +210,9 @@ fn file_roundtrips_through_the_page_reader_and_duckdb() {
             .collect::<Vec<_>>()
     );
 
-    let duckdb = "/Users/addmaple/.duckdb/cli/latest/duckdb";
-    if !std::path::Path::new(duckdb).exists() {
+    let Some(duckdb) = duckdb() else {
         return;
-    }
+    };
     let path = std::env::temp_dir().join("compact-parquet-thrift-encode.parquet");
     std::fs::write(&path, file).unwrap();
     let sql = format!(
@@ -329,10 +329,9 @@ fn footer_carries_chunk_statistics() {
         ]
     );
 
-    let duckdb = "/Users/addmaple/.duckdb/cli/latest/duckdb";
-    if !std::path::Path::new(duckdb).exists() {
+    let Some(duckdb) = duckdb() else {
         return;
-    }
+    };
     let path = std::env::temp_dir().join("compact-parquet-thrift-stats.parquet");
     std::fs::write(&path, file).unwrap();
     let sql = format!(
@@ -729,10 +728,9 @@ fn delta_file_roundtrips_through_the_page_reader_and_duckdb() {
             .collect::<Vec<_>>()
     );
 
-    let duckdb = "/Users/addmaple/.duckdb/cli/latest/duckdb";
-    if !std::path::Path::new(duckdb).exists() {
+    let Some(duckdb) = duckdb() else {
         return;
-    }
+    };
     let path = std::env::temp_dir().join("compact-parquet-thrift-delta.parquet");
     std::fs::write(&path, file).unwrap();
     let sql = format!(
@@ -758,4 +756,11 @@ fn delta_file_roundtrips_through_the_page_reader_and_duckdb() {
         line.trim(),
         format!("{rows},{a_sum},{a_nulls},{b_sum},{byte_sum},{byte_sum}")
     );
+}
+
+/// The DuckDB CLI named by `DUCKDB`, if it exists.
+fn duckdb() -> Option<std::path::PathBuf> {
+    std::env::var_os("DUCKDB")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.exists())
 }

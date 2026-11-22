@@ -1,4 +1,4 @@
-//! Column chunk statistics (ColumnMetaData field 12) for readers that prune row groups.
+//! Column chunk statistics (`ColumnMetaData` field 12) for readers that prune row groups.
 //!
 //! Only types whose Parquet sort order is the plain signed order of their value get a
 //! range: BOOLEAN, INT32 (including DATE) and INT64. Floats (NaN ordering) and byte
@@ -10,15 +10,21 @@ use crate::{SliceSink, Writer};
 /// What a chunk's footer says about its values. `Default` claims nothing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ChunkStats {
+    /// Null rows in the chunk.
     pub null_count: Option<i64>,
+    /// Min/max of the present values, for types with a plain sort order.
     pub range: Option<ValueRange>,
 }
 
 /// Inclusive min/max of a chunk's present values, in the physical type's order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(missing_docs)] // `min` and `max` mean the same thing in every variant.
 pub enum ValueRange {
+    /// `BOOLEAN` (false < true).
     Bool { min: bool, max: bool },
+    /// `INT32`, including DATE.
     I32 { min: i32, max: i32 },
+    /// `INT64`.
     I64 { min: i64, max: i64 },
 }
 
@@ -67,7 +73,7 @@ fn bounds<T: Ord + Copy>(mut values: impl Iterator<Item = T>) -> Option<(T, T)> 
     Some(values.fold((first, first), |(min, max), v| (min.min(v), max.max(v))))
 }
 
-/// Write ColumnMetaData field 12 when there is anything to say.
+/// Write `ColumnMetaData` field 12 when there is anything to say.
 pub(crate) fn write_statistics(
     w: &mut Writer<SliceSink<'_>>,
     stats: &ChunkStats,
