@@ -1,10 +1,11 @@
-//! Read the local wcol Parquet files and check them against their own
-//! metadata, then against DuckDB when the CLI is available.
+//! Read a directory of local Parquet files and check them against their own
+//! metadata, then against DuckDB when a CLI path is given.
 //!
-//! The files are gitignored, so this test does nothing unless that directory
-//! exists. Run it with the files in place:
+//! Opt-in: the test does nothing unless `PARQUET_DATA_DIR` names a directory.
+//! Set `DUCKDB` to a DuckDB CLI binary to also compare aggregates, and
+//! `WCOL_PARQUET_FILTER` to restrict files by name substring:
 //!
-//! `cargo test --test wcol_files -- --nocapture`
+//! `PARQUET_DATA_DIR=../wcol/data cargo test --test wcol_files -- --nocapture`
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -19,7 +20,9 @@ use compact_parquet_thrift::parquet::{footer_range, scan_footer, ColumnChunkInfo
 use compact_parquet_thrift::values::{DeltaByteParts, Int96};
 use compact_parquet_thrift::{Reader, WireType};
 
-const DUCKDB: &str = "/Users/addmaple/.duckdb/cli/latest/duckdb";
+fn duckdb() -> Option<PathBuf> {
+    std::env::var_os("DUCKDB").map(PathBuf::from)
+}
 
 #[derive(Clone, Debug)]
 struct Leaf {
@@ -48,11 +51,13 @@ struct Agg {
 }
 
 fn main_files() -> Vec<PathBuf> {
-    let dir = Path::new("/Users/addmaple/sites/dtonge/wcol/data");
+    let Some(dir) = std::env::var_os("PARQUET_DATA_DIR").map(PathBuf::from) else {
+        return Vec::new();
+    };
     if !dir.is_dir() {
         return Vec::new();
     }
-    let mut files: Vec<_> = std::fs::read_dir(dir)
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
         .expect("read wcol data dir")
         .map(|entry| entry.expect("dir entry").path())
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("parquet"))
@@ -72,7 +77,7 @@ fn main_files() -> Vec<PathBuf> {
 fn reads_local_wcol_parquet_files() {
     let files = main_files();
     if files.is_empty() {
-        eprintln!("skipping: wcol/data has no parquet files");
+        eprintln!("skipping: set PARQUET_DATA_DIR to a directory of parquet files");
         return;
     }
     let mut failures = Vec::new();
@@ -198,7 +203,7 @@ fn read_file(path: &Path) -> Result<Report, String> {
         let text: Vec<_> = counts.iter().map(|(k, n)| format!("{n} {k}")).collect();
         notes.push(format!("skipped first row group: {}", text.join(", ")));
     }
-    if Path::new(DUCKDB).exists() && !comparable.is_empty() {
+    if duckdb().is_some_and(|bin| bin.exists()) && !comparable.is_empty() {
         check_duckdb(path, &comparable).map_err(|e| format!("duckdb: {e}"))?;
         notes.push("duckdb aggregates matched".to_string());
     }
@@ -825,7 +830,7 @@ fn duckdb_types(path: &Path) -> Result<std::collections::HashMap<String, String>
         "SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_parquet('{}'))",
         path.display().to_string().replace('\'', "''")
     );
-    let output = Command::new(DUCKDB)
+    let output = Command::new(duckdb().ok_or("DUCKDB is not set")?)
         .args(["-csv", "-c", &sql])
         .output()
         .map_err(|e| e.to_string())?;
@@ -907,7 +912,7 @@ fn quote(name: &str) -> String {
 }
 
 fn run_duckdb(sql: &str) -> Result<String, String> {
-    let output = Command::new(DUCKDB)
+    let output = Command::new(duckdb().ok_or("DUCKDB is not set")?)
         .args(["-csv", "-c", sql])
         .output()
         .map_err(|e| e.to_string())?;

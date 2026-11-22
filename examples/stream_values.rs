@@ -7,7 +7,7 @@ fn main() -> Result<(), compact_parquet_thrift::values::Error> {
     // A Parquet PLAIN INT32 page: 10, 20, 30, 40.
     let mut ints = PlainValues::<i32>::new(4);
     let mut sum = 0i64;
-    let encoded: [u8; 16] = [10,0,0,0, 20,0,0,0, 30,0,0,0, 40,0,0,0];
+    let encoded: [u8; 16] = [10, 0, 0, 0, 20, 0, 0, 0, 30, 0, 0, 0, 40, 0, 0, 0];
     for chunk in encoded.chunks(3) {
         let n = ints.feed(chunk, |value| sum += i64::from(value))?;
         assert_eq!(n, chunk.len());
@@ -16,7 +16,7 @@ fn main() -> Result<(), compact_parquet_thrift::values::Error> {
     assert_eq!(sum, 100);
 
     // PLAIN BYTE_ARRAY page, including a value split across transport chunks.
-    let bytes = [5,0,0,0, b'h',b'e',b'l',b'l',b'o'];
+    let bytes = [5, 0, 0, 0, b'h', b'e', b'l', b'l', b'o'];
     let mut strings = ByteArrays::new(1, 1_024);
     for chunk in bytes.chunks(2) {
         strings.feed(chunk, |event| match event {

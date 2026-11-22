@@ -1,8 +1,12 @@
 //! cargo run --example inspect -- file.parquet
 //! Only the 8-byte trailer and footer are loaded, not the entire Parquet file.
 
-use std::{env, fs::File, io::{Read, Seek, SeekFrom}};
 use compact_parquet_thrift::parquet::{footer_range, scan_footer};
+use std::{
+    env,
+    fs::File,
+    io::{Read, Seek, SeekFrom},
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = env::args().nth(1).expect("usage: inspect FILE.parquet");
@@ -29,7 +33,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     }).expect("invalid Thrift footer");
 
-    println!("rows={:?} row_groups={} columns={}",
-        summary.num_rows, summary.row_groups, summary.columns);
+    println!(
+        "rows={:?} row_groups={} columns={}",
+        summary.num_rows, summary.row_groups, summary.columns
+    );
     Ok(())
 }
