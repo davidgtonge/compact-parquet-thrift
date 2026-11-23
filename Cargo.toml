@@ -6,6 +6,7 @@ rust-version = "1.83"
 license = "MIT OR Apache-2.0"
 description = "Allocation-free Thrift Compact codec and bounded-memory Parquet page streaming"
 repository = "https://github.com/davidgtonge/compact-parquet-thrift"
+homepage = "https://davidgtonge.github.io/compact-parquet-thrift/"
 readme = "README.md"
 keywords = ["parquet", "thrift", "no-std", "wasm", "streaming"]
 categories = ["encoding", "parser-implementations", "no-std", "no-std::no-alloc", "wasm"]

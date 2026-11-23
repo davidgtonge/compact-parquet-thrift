@@ -5,6 +5,9 @@ reader and writer for Rust. Built for range-reading Parquet from object
 storage inside WebAssembly, where memory is fixed and input arrives in
 arbitrary chunks.
 
+The [interactive explainer](https://davidgtonge.github.io/compact-parquet-thrift/)
+walks a Parquet footer byte by byte, then decodes pages into a row.
+
 - `#![no_std]`, no `unsafe`, no dependencies, no allocation in the library.
 - **Thrift:** zero-copy `Reader` over a borrowed slice, `Writer` into any
   `Sink` (including a fixed caller-owned buffer), unknown-field skip and raw
