@@ -5,7 +5,7 @@ All notable changes to this crate are documented here. The format follows
 follows [Semantic Versioning](https://semver.org/) (pre-1.0: a minor bump may
 break the API).
 
-## [Unreleased]
+## [0.3.0] - 2026-11-23
 
 First release prepared for crates.io.
 
