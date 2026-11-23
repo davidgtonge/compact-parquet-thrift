@@ -458,7 +458,7 @@ fn rle_boolean_feed_limited_emits_one_value_at_a_time() {
     }
     assert_eq!(got, [true, true, true, false, false, false, false]);
     assert_eq!(after_first, Some(2), "the second run must stay unconsumed");
-    assert!(rest.is_empty());
+    assert_eq!(rest, []);
     d.finish().unwrap();
 }
 
